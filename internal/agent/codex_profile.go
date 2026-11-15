@@ -107,12 +107,14 @@ func codexProfileIn(at place) *Agent {
 	// the catalog as Codex reads it from this file: beside it, so by name
 	catalogRef := filepath.Base(catalogPath)
 	list := func() []byte { return codexcat.CatalogAt(magpieModels("codex"), get("model_reasoning_effort")) }
-	ownList := func() []byte {
-		cur, _ := edit.Read(catalogPath)
-		return codexcat.Keep(cur, list())
+	ownList := func() error {
+		return writeCodexCatalog(catalogPath, func() ([]byte, error) { return list(), nil }, true)
 	}
 	// the list goes with the profile, unless the user added to it
 	dropList := func() {
+		if codexCatalogPending(catalogPath) {
+			return
+		}
 		cur, err := edit.Read(catalogPath)
 		if err != nil {
 			return
@@ -131,7 +133,7 @@ func codexProfileIn(at place) *Agent {
 		if err := edit.SetTOMLTable(path, table, codexProviderTable(at.v1(), codexKeptToken(path, table, at.gwKey()))...); err != nil {
 			return err
 		}
-		if err := writeOwnList(catalogPath, ownList()); err != nil {
+		if err := ownList(); err != nil {
 			return err
 		}
 		return edit.SetTOMLTop(path,
@@ -160,11 +162,7 @@ func codexProfileIn(at place) *Agent {
 				// to was deleted): the list is still magpie's, and Codex
 				// would keep offering the models it had (JNDliuliuM on X)
 				if get("model_provider") == magpieID && get("model_catalog_json") == catalogRef {
-					if cur, err := edit.Read(catalogPath); err == nil {
-						if b := ownList(); string(b) != string(cur) {
-							return writeOwnList(catalogPath, b)
-						}
-					}
+					return ownList()
 				}
 				return nil
 			}
@@ -176,10 +174,7 @@ func codexProfileIn(at place) *Agent {
 			if t["base_url"] != at.v1() || t["experimental_bearer_token"] != codexKeptToken(path, table, at.gwKey()) {
 				return put(get("model"))
 			}
-			if b := ownList(); string(b) != string(fileBytes(catalogPath)) {
-				return writeOwnList(catalogPath, b)
-			}
-			return nil
+			return ownList()
 		},
 		Check: func() string {
 			if !wired() {
@@ -226,13 +221,13 @@ func codexProfileIn(at place) *Agent {
 					if err != nil || !wired() {
 						return err
 					}
-					return writeOwnList(catalogPath, ownList())
+					return ownList()
 				},
 				Options: func(cur map[string]string) []Option { return codexEfforts(magpieModels("codex"), cur["model"]) },
 			},
 			codexScopeField(at, wired),
 		},
-	}, path, catalogPath)
+	}, path)
 }
 
 var noticeCodexProfile = newNotice("Start Codex with codex -p magpie; plain codex keeps its own provider.")

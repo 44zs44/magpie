@@ -11,7 +11,40 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/codexcat"
+	"github.com/yetone/magpie/internal/settings"
 )
+
+func TestCodexInstructionsReplacementStaysInCodex(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := codexcat.RememberInstructions([]any{map[string]any{
+		"slug": "gpt-own", "base_instructions": "official instructions",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	s := settings.Load()
+	s.ModelCodexInstructions = map[string]string{"codex/gpt-own": "only for Codex"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(map[string]any{
+		"etag": codexcat.WithTag("upstream", codexcat.PolicyTag("list")),
+		"models": []any{map[string]any{
+			"slug": "gpt-own", "base_instructions": "only for Codex",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := codexInstructions("gpt-own"); got != "official instructions" {
+		t.Fatalf("another agent inherited the Codex-only replacement: %q", got)
+	}
+}
 
 // The conversation goes in the session headers Codex CLI 0.162 sends,
 // session-id and thread-id, by which the ChatGPT backend finds its cached

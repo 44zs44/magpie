@@ -9,6 +9,35 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
+func TestCodexCatalogImportCmd(t *testing.T) {
+	groupsHome(t)
+	path := filepath.Join(t.TempDir(), "custom.json")
+	raw := `{"models":[{"slug":"a/only-a","base_instructions":"A custom Codex instruction"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runOut(t, "model", "codex-import", path, "a/only-a", "base_instructions")
+	if err != nil || !strings.Contains(out, "imported") {
+		t.Fatalf("import: %q %v", out, err)
+	}
+	if settings.Load().ModelCodexInstructions["a/only-a"] != "A custom Codex instruction" {
+		t.Fatal("prompt not saved")
+	}
+	b, _ := os.ReadFile(path)
+	if string(b) != raw {
+		t.Fatal("custom catalog changed")
+	}
+	for _, args := range [][]string{
+		{"model", "codex-import", path, "a/only-a"},
+		{"model", "codex-import", path, "a/only-a", "slug"},
+		{"model", "codex-import", path, "missing/model", "base_instructions"},
+	} {
+		if _, err := runOut(t, args...); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
 // magpie model spec (Dani Ariyanto on Discord): a model nothing knows is
 // shown unknown on each part, takes a whole spec in one command, shows it
 // as the user's, is listed by magpie model specs, and --reset puts it back.

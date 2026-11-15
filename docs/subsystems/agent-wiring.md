@@ -8,6 +8,65 @@ supported agent: where its config lives, which fields matter and which
 values to offer. It also records what magpie set, so a later change made by
 something else shows up as drift.
 
+## Editable Codex catalogs
+
+`magpie-models.json` (including profile-only wiring) and
+`magpie-desktop-models.json` import supported hand edits before a normal
+catalog sync rewrites them (`writeCodexCatalog` in
+[`codex_catalog_edits.go`](../../internal/agent/codex_catalog_edits.go)).
+The supported fields are `base_instructions`,
+`model_messages.instructions_template`, `context_window`,
+`auto_compact_token_limit`, `supported_reasoning_levels`, and
+`input_modalities`. They update the existing provider/model preferences;
+the two instruction spellings update the same Codex-only replacement.
+Changing both instruction fields to different values is refused. Removing
+a supported field, or setting it to null, removes its override. Other
+`model_messages` members cannot be edited through this importer.
+
+A fingerprint record, `codex-catalog-<path hash>.json` in Magpie's config
+directory, records each last-written model field and its explicit settings.
+It contains no prompt text. Only fields changed from that record are
+imported, so vendor/default changes remain free to update untouched fields.
+An explicit settings change and a different file edit of the same field
+are a conflict: the file is left in place and the sync reports/logs why.
+A malformed or unreadable catalog or baseline is not overwritten. The
+catalog and its fingerprint record are written together; partial preference
+saves can be retried. Disconnect keeps a file with pending edits.
+
+An existing catalog without a baseline cannot distinguish old generated
+values from hand edits. If its supported fields differ from the current
+generated catalog, sync stops and asks for an explicit import:
+
+```
+magpie model codex-import /path/to/catalog.json provider/model base_instructions context_window
+```
+
+Only the named fields of that model are imported. On a previously tracked
+catalog the other pending edits remain pending. On a pre-tracking managed
+catalog, explicit import establishes its initial baseline; unselected
+fields retain their configured/default values on the next generation.
+A custom catalog such as `magpie-models-local.json` can be imported without
+being adopted or changing `model_catalog_json`. Its file remains user-owned;
+automatic regeneration continues only for Magpie's managed catalogs.
+No file watcher is installed. Changes take effect on the next normal sync;
+an already running Codex may need to reload its model catalog.
+
+Instruction replacements are saved as settings' `codexModelInstructions`,
+keyed by the canonical provider/model id (native slugs map to `codex/slug`).
+They apply to both local catalogs and both HTTP Codex model-list routes;
+the ETag includes them and the explicit model specifications. The original
+official instruction, compaction, reasoning and modality fields are kept
+in `codex-original-instructions.json`, so a client cache of a replaced
+prompt or specification cannot freeze it after reset or leak it into another agent's
+ChatGPT requests. This is source recovery data, not another user setting.
+Preview/rendering only reads it; explicit saves and fresh backend lists
+populate it. See the provider reference for field validation and group
+limitations. Existing `System prompt` remains an appended gateway prompt.
+
+Regression coverage is in `codex_catalog_kept_test.go`,
+`codex_catalog_unparsed_test.go`, `codex_profile_test.go`,
+`model_spec_cli_test.go`, `modelspec_test.go`, and `codexcat/official_test.go`.
+
 ## Responsibilities and sources of truth
 
 | Part | Responsibility | Source |

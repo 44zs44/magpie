@@ -1246,6 +1246,10 @@ type Settings struct {
 	// agent sends it (liucl on X). Absent is the agent's prompt as sent
 	// (provider.ModelSystemPrompt).
 	ModelSystemPrompts map[string]string `json:"modelSystemPrompts,omitempty"`
+	// ModelCodexInstructions replace Codex's base instructions for one
+	// provider/model. Unlike ModelSystemPrompts, these belong to Codex's
+	// model catalog and are not appended to requests from other agents.
+	ModelCodexInstructions map[string]string `json:"codexModelInstructions,omitempty"`
 	// ModelTiers is the speed the user gave one model, by "<provider
 	// id>/<model id>": "priority" (Codex's Fast) or "ultrafast", sent on
 	// every request for the model of an agent with no fast pick of its own

@@ -1,11 +1,42 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/settings"
 )
+
+func TestCodexProfileCatalogImportsInstructions(t *testing.T) {
+	home, read := codexHome(t, "", "")
+	cx := codex(home)
+	if err := cx.Field("scope").Set("profile"); err != nil {
+		t.Fatal(err)
+	}
+	cx = codex(home)
+	if err := cx.Apply("model", "fake/m1"); err != nil {
+		t.Fatal(err)
+	}
+	original := read()
+	path := filepath.Join(home, ".codex", "magpie-models.json")
+	var cat map[string]any
+	json.Unmarshal([]byte(readFile(path)), &cat)
+	cat["models"].([]any)[0].(map[string]any)["base_instructions"] = "profile instructions"
+	b, _ := json.Marshal(cat)
+	writeFile(t, path, string(b))
+	if err := codex(home).Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Load().ModelCodexInstructions["fake/m1"] != "profile instructions" {
+		t.Fatal("profile edit not saved")
+	}
+	if read() != original {
+		t.Fatal("profile import changed main Codex config")
+	}
+}
 
 // Codex wired by its profile alone (hpnjstar on X): codex -p magpie goes
 // through magpie, and config.toml, which plain codex reads, is not touched

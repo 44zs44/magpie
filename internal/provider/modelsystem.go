@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -69,4 +70,59 @@ func setModelSystemPrompt(ref, text string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// SetCodexModelInstructions replaces the base instructions Codex reads for
+// a model. Empty text restores the current catalog's instructions.
+func SetCodexModelInstructions(ref, text string) error {
+	key := strings.TrimPrefix(strings.TrimSpace(ref), "magpie/")
+	if strings.TrimSpace(text) == "" {
+		text = ""
+	}
+	if IsGroupRef(key) {
+		g, _, ok := FindGroup(key)
+		if !ok {
+			return fmt.Errorf("no routing group %s", key)
+		}
+		key = GroupPrefix + g.ID
+	} else {
+		p, model, err := splitRef(key)
+		if err != nil {
+			return err
+		}
+		if text != "" && !p.serves(model) {
+			return fmt.Errorf("%s has no model %s (magpie provider %s lists them)", p.ID, model, p.ID)
+		}
+		key = p.ID + "/" + model
+	}
+	if text != "" {
+		if len(text) > maxModelSystemPrompt {
+			return fmt.Errorf("Codex instructions are at most %d KB", maxModelSystemPrompt>>10)
+		}
+		if strings.ContainsRune(text, 0) {
+			return fmt.Errorf("Codex instructions have no NUL")
+		}
+	}
+	s, err := settings.LoadChecked()
+	if err != nil {
+		return err
+	}
+	if s.ModelCodexInstructions[key] == text {
+		return nil
+	}
+	if err := codexcat.PrepareInstructions(); err != nil {
+		return err
+	}
+	if text == "" {
+		delete(s.ModelCodexInstructions, key)
+	} else {
+		if s.ModelCodexInstructions == nil {
+			s.ModelCodexInstructions = map[string]string{}
+		}
+		s.ModelCodexInstructions[key] = text
+	}
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	return touchedIf(true, nil)
 }

@@ -64,6 +64,15 @@ func codexModelsAt(ctx context.Context, sign func(context.Context, *http.Request
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ChatGPT models: %s", resp.Status)
 	}
+	var list struct {
+		Models []any `json:"models"`
+	}
+	if err := json.Unmarshal(b, &list); err != nil {
+		return nil, fmt.Errorf("ChatGPT models: %w", err)
+	}
+	if err := codexcat.RememberInstructions(list.Models); err != nil && codexcat.ModelOverridesOn() {
+		return nil, err
+	}
 	saveCodexPrompts(b)
 	ms := parseCodexModels(b)
 	if len(ms) == 0 {

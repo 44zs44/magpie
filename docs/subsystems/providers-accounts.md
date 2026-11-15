@@ -471,6 +471,32 @@ and `TestHistoricalWindowHoldsUsesEachWindowsOwnReading`.
   `TestClaudeSwitchWaitsForClaudeCodesRefresh`,
   `TestClaudeSwitchStaleAndHeldLocks`.
 
+## Edits imported from Codex catalogs
+
+`ApplyCodexModelEdits` in
+[`codex_catalog_edits.go`](../../internal/provider/codex_catalog_edits.go)
+checks an entire batch before saving it. It maps `context_window` to the
+provider's `Contexts`, `auto_compact_token_limit` to `ModelCompacts`,
+`supported_reasoning_levels` to `ModelEfforts`/`ModelReasonless`, and
+`input_modalities` to `ModelImages`. `base_instructions` is a Codex-only
+replacement in `ModelCodexInstructions`, separate from the appended system
+prompt. Null removes an override; an empty reasoning array explicitly turns
+reasoning off. Existing normalization and provider saves still apply.
+
+A routing group's context, compaction and reasoning edits belong to that
+group; they never rewrite its members. Its image capability still comes
+from its members, so an image edit on the group is refused. Unknown fields,
+invalid types and unavailable models are refused before configuration is
+written. A storage failure leaves the catalog and its synchronization
+baseline unchanged; already saved values can be retried without repeated
+notifications. `CodexModelEditState` supplies explicitly configured values
+for the synchronization conflict check, excluding upstream defaults.
+
+`TestCodexCatalogEditsPersistInModelSettings`,
+`TestCodexCatalogEditsRefuseWholeInvalidImport` and
+`TestCodexCatalogEditsGroupLeavesMembersAlone` cover persistence, reset,
+idempotency, whole-batch validation and group isolation.
+
 ## Verification
 
 ```sh

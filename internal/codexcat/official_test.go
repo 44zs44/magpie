@@ -7,7 +7,202 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/settings"
 )
+
+func TestCodexInstructionsOverrideEveryEntryKind(t *testing.T) {
+	v1Home(t, `{"models":[{"slug":"gpt-own","base_instructions":"legacy","model_messages":{"instructions_template":"official","instructions_variables":{"personality":"original"}}}]}`)
+	if err := PrepareInstructions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RememberInstructions([]any{map[string]any{"slug": "gpt-own", "base_instructions": "newer original"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareInstructions(); err != nil {
+		t.Fatal(err)
+	}
+	originals, err := readInstructions()
+	if err != nil || string(originals["gpt-own"]["base_instructions"]) != `"newer original"` {
+		t.Fatal("saving a setting replaced a fresh original with Codex's older cache")
+	}
+	s := settings.Load()
+	s.ModelCodexInstructions = map[string]string{
+		"codex/gpt-own": "own replacement", "relay/listed": "listed replacement",
+		"other/plain": "plain replacement", "group/test": "group replacement",
+	}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	ms := []catalog.Model{
+		{ID: "codex/gpt-own"},
+		{ID: "relay/listed", Codex: []byte(`{"slug":"listed","base_instructions":"relay base","model_messages":{"instructions_template":"relay template"}}`)},
+		{ID: "other/plain"}, {ID: "group/test"}, {ID: "other/untouched"},
+	}
+	got := entryBySlug(t, ms)
+	for id, text := range s.ModelCodexInstructions {
+		e := got[id]
+		if e["base_instructions"] != text {
+			t.Errorf("%s base instructions: %v", id, e["base_instructions"])
+		}
+		if msgs, ok := e["model_messages"].(map[string]any); ok && msgs["instructions_template"] != text {
+			t.Errorf("%s effective template: %v", id, msgs["instructions_template"])
+		}
+	}
+	if got["other/untouched"]["base_instructions"] != Prompt {
+		t.Fatal("another model's prompt changed")
+	}
+	if CacheEntries()["gpt-own"]["model_messages"].(map[string]any)["instructions_template"] != "official" {
+		t.Fatal("the source cache was modified")
+	}
+	before, err := os.ReadFile(instructionsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	Catalog(ms)
+	after, err := os.ReadFile(instructionsPath())
+	if err != nil || string(before) != string(after) {
+		t.Fatal("catalog generation changed the original-instructions record")
+	}
+	s.ModelCodexInstructions = nil
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	got = entryBySlug(t, ms)
+	if got["relay/listed"]["base_instructions"] != "relay base" || got["other/plain"]["base_instructions"] != Prompt {
+		t.Fatal("removing overrides did not restore the original sources")
+	}
+}
+
+func TestCodexInstructionsCacheRestoresCurrentDefaults(t *testing.T) {
+	v1Home(t, `{"etag":"upstream","models":[{"slug":"gpt-own","base_instructions":"legacy","model_messages":{"instructions_template":"official"}}]}`)
+	if err := PrepareInstructions(); err != nil {
+		t.Fatal(err)
+	}
+	s := settings.Load()
+	s.CodexAgentsV1 = true
+	s.ModelCodexInstructions = map[string]string{"codex/gpt-own": "my instructions"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	source := CacheEntries()["gpt-own"]
+	ApplyInstructions(source, "codex/gpt-own")
+	tag := WithTag("upstream", PolicyTag("models"))
+	if !markedInstructions(tag) || !MarkedV1(tag) {
+		t.Fatalf("policy markers lost: %s", tag)
+	}
+	b, err := json.Marshal(map[string]any{"etag": tag, "models": []any{source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.CodexModelsCache(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareInstructions(); err != nil {
+		t.Fatal(err)
+	}
+	// A later upstream update must be the default after reset, even when
+	// Codex still holds the list containing our old replacement.
+	if err := RememberInstructions([]any{map[string]any{
+		"slug": "gpt-own", "base_instructions": "new legacy",
+		"model_messages": map[string]any{"instructions_template": "new official"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	s.ModelCodexInstructions = nil
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	got := CacheEntries()["gpt-own"]
+	if got["base_instructions"] != "new legacy" || got["model_messages"].(map[string]any)["instructions_template"] != "new official" {
+		t.Fatalf("old replacement survived reset: %v", got)
+	}
+	if PolicyTag("models") == tag || markedInstructions(WithTag("upstream", PolicyTag("models"))) {
+		t.Fatal("removing instructions kept their ETag policy")
+	}
+	if err := os.WriteFile(instructionsPath(), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareInstructions(); err == nil {
+		t.Fatal("unknown originals were accepted")
+	}
+	if got := CacheEntries(); got != nil {
+		t.Fatal("a cached replacement was treated as an official default")
+	}
+}
+
+func TestCodexInstructionsUnknownSourceStopsSave(t *testing.T) {
+	v1Home(t, "{broken")
+	if err := PrepareInstructions(); err == nil {
+		t.Fatal("a malformed model cache was accepted as an empty source")
+	}
+	if _, err := os.Stat(instructionsPath()); !os.IsNotExist(err) {
+		t.Fatalf("a failed read wrote original instructions: %v", err)
+	}
+	if err := os.MkdirAll(instructionsPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RememberInstructions([]any{map[string]any{"slug": "gpt-own", "base_instructions": "original"}}); err == nil {
+		t.Fatal("an unreadable originals file was silently replaced")
+	}
+}
+
+func TestCodexNativeModelOverridesAndReset(t *testing.T) {
+	v1Home(t, `{"etag":"official","models":[{"slug":"gpt-own","base_instructions":"original","context_window":200000,"auto_compact_token_limit":150000,"supported_reasoning_levels":[{"effort":"low","description":"Original low"},{"effort":"high","description":"Original high"}],"default_reasoning_level":"low","input_modalities":["text","image"]}]}`)
+	if err := PrepareInstructions(); err != nil {
+		t.Fatal(err)
+	}
+	baseline := CacheEntries()["gpt-own"]
+	before := PolicyTag("models")
+	s := settings.Load()
+	s.ModelCompacts = map[string]int{"codex/gpt-own": 100000}
+	s.ModelEfforts = map[string][]string{"codex/gpt-own": {"high"}}
+	s.ModelImages = map[string]bool{"codex/gpt-own": false}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if PolicyTag("models") == before {
+		t.Fatal("native spec edits did not change the ETag without a prompt override")
+	}
+	got := entryBySlug(t, []catalog.Model{{ID: "codex/gpt-own", Context: 200000}})["codex/gpt-own"]
+	if got["auto_compact_token_limit"] != float64(100000) || got["default_reasoning_level"] != "high" || !reflect.DeepEqual(got["input_modalities"], []any{"text"}) {
+		t.Fatalf("native model settings were ignored: %v", got)
+	}
+	levels := got["supported_reasoning_levels"].([]any)
+	if len(levels) != 1 || levels[0].(map[string]any)["description"] != "Original high" {
+		t.Fatalf("native levels not narrowed with their descriptions: %v", levels)
+	}
+	// The backend response uses its native slug, unlike model_provider's
+	// codex/ entry, and Codex caches precisely this overridden response.
+	native := CacheEntries()["gpt-own"]
+	ApplyModelOverrides(native, "codex/gpt-own")
+	b, err := json.Marshal(map[string]any{"etag": WithTag("official", PolicyTag("models")), "models": []any{native}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.CodexModelsCache(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.ModelCompacts, s.ModelEfforts, s.ModelImages = nil, nil, nil
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if got := CacheEntries()["gpt-own"]; !reflect.DeepEqual(got, baseline) {
+		t.Fatalf("reset did not restore native defaults: %v", got)
+	}
+	s.ModelReasonless = map[string]bool{"codex/gpt-own": true}
+	s.ModelImages = map[string]bool{"codex/gpt-own": true}
+	s.ModelCompacts = map[string]int{"codex/gpt-own": 200000}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	got = entryBySlug(t, []catalog.Model{{ID: "codex/gpt-own", Context: 200000}})["codex/gpt-own"]
+	if len(got["supported_reasoning_levels"].([]any)) != 0 || got["default_reasoning_level"] != nil || got["auto_compact_token_limit"] != nil {
+		t.Fatalf("reasonless/full-window preferences not applied: %v", got)
+	}
+	if !reflect.DeepEqual(got["input_modalities"], []any{"text", "image"}) {
+		t.Fatalf("explicit vision preference lost: %v", got["input_modalities"])
+	}
+}
 
 // codexDir holds the files of openai/codex rust-v0.166.0 that say what Codex
 // sends as a model's instructions, as they are in that release:

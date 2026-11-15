@@ -2388,6 +2388,12 @@ func (s *Server) askCodexList(rctx context.Context, h http.Header, query string,
 		Models []any `json:"models"`
 	}
 	if res.StatusCode < 300 && json.Unmarshal(b, &list) == nil && list.Models != nil {
+		if err := codexcat.RememberInstructions(list.Models); err != nil {
+			log.Printf("codex: keep original model instructions: %v", err)
+			if codexcat.ModelOverridesOn() {
+				return
+			}
+		}
 		body, etag = b, res.Header.Get("ETag")
 		// the versions as the backend says them, before any is stamped
 		// (see codexcat.V1)
@@ -2482,6 +2488,12 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 	defer provider.Hold()()
 	cached := own == nil
 	if cached {
+		if codexcat.ModelOverridesOn() {
+			if err := codexcat.PrepareInstructions(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+		}
 		for _, e := range codexcat.CacheEntries() {
 			own = append(own, e)
 		}
@@ -2605,6 +2617,8 @@ func codexMerged(own []any, cached bool) []any {
 	for _, m := range own {
 		if o, ok := m.(map[string]any); ok {
 			codexcat.AutoReview(o, autoReview)
+			slug, _ := o["slug"].(string)
+			codexcat.ApplyModelOverrides(o, "codex/"+slug)
 		}
 	}
 	// a Codex here for account failover alone, not connected to magpie,

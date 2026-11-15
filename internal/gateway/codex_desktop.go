@@ -132,6 +132,18 @@ func codexDeskRefresh(done chan struct{}, who string) {
 	ctx, cancel := context.WithTimeout(context.Background(), codexDeskWait)
 	defer cancel()
 	b, err := codexDeskFetch(ctx)
+	if err == nil {
+		var list struct {
+			Models []any `json:"models"`
+		}
+		if err = json.Unmarshal(b, &list); err == nil {
+			err = codexcat.RememberInstructions(list.Models)
+			if err != nil && !codexcat.ModelOverridesOn() {
+				log.Printf("codex: keep original model instructions: %v", err)
+				err = nil
+			}
+		}
+	}
 	codexDesk.Lock()
 	changed := false
 	wasRevoked := codexDesk.revoked && codexDesk.who == who

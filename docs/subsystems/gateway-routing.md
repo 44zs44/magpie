@@ -1962,6 +1962,22 @@ and `TestCodexPagesRead`.
 Covered by `TestCommandCodeSearchesForOtherModels`,
 `TestPluginSearchModelIsASearcher` and `TestSearcherChosen`.
 
+Codex's own `web.run` reaches `alphaSearch` on `/alpha/search`,
+`/v1/alpha/search` or the Codex backend path. A ChatGPT account's model
+relays the backend response unchanged. For other models, or when all
+ChatGPT accounts fail, `alphaSearchHere` uses `webSearch` and returns both
+the existing tool text (`output`) and its pages as `results` with
+`type: "text_result"`, `url` and `title`, which the Codex app reads for its
+sources list. Results from successful queries keep their order even when
+another query fails; an empty or failed query adds no sources. This does
+not mint citation ids or add support for opening, clicking or finding in
+a page. Those commands still require the ChatGPT backend, and unsupported
+commands and failed searches remain tool explanations with HTTP 200 so
+they do not end the turn. Covered by `TestCodexWebRunSearchesOnChatGPTAccount`,
+`TestCodexWebRunChatGPTFailsSearchedByMagpie`,
+`TestCodexWebRunOnOtherModelSearchedByMagpie` and
+`TestCodexWebRunKeepsSourcesAcrossQueries`.
+
 ## A searcher that fails or finds nothing
 
 `modelSearch` asks the searcher picked in Settings (or the one magpie picks)

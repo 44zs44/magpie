@@ -3,17 +3,13 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// A magpie-models.json that doesn't parse is kept aside before magpie
-// writes its list over the file or takes the file away: Keep (#1450) can
-// hold nothing of a file it can't read, so the keys the user added by hand
-// would end with no copy — the rule the other state files were given
-// (#2263), which this file missed.
+// A malformed editable catalog is left in place by synchronization.
+// Disconnect also keeps it, because it may contain unsaved preferences.
 func TestUnparsedCodexCatalogKeptAside(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	list := filepath.Join(home, ".codex", "magpie-models.json")
@@ -31,23 +27,16 @@ func TestUnparsedCodexCatalogKeptAside(t *testing.T) {
 		t.Fatal(err)
 	}
 	SyncCatalog()
-	if !strings.Contains(readFile(list), `"added/m2"`) {
-		t.Fatal("sync didn't write the new model")
-	}
-	if bad, _ := filepath.Glob(list + ".bad-*"); len(bad) == 0 {
-		t.Fatalf("the unparsed list was written over with no copy kept")
+	if readFile(list) != b[:len(b)-2] {
+		t.Fatal("sync replaced the malformed editable catalog")
 	}
 
-	// the list broken again, and magpie steps out: the file goes, but a
-	// copy of what it held stays
+	// Stepping out disconnects the config without deleting the broken file.
 	writeFile(t, list, b[:len(b)-2])
 	if err := cx.Fields[0].Set(""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(list); err == nil {
-		t.Error("a list magpie steps out of stayed")
-	}
-	if bad, _ := filepath.Glob(list + ".bad-*"); len(bad) == 0 {
-		t.Fatalf("the unparsed list was removed with no copy kept")
+	if _, err := os.Stat(list); err != nil || readFile(list) != b[:len(b)-2] {
+		t.Fatal("disconnect lost the malformed editable catalog")
 	}
 }

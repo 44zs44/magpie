@@ -10,6 +10,8 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/settings"
@@ -498,7 +501,107 @@ func entriesAt(ms []catalog.Model, after int, effort string) []any {
 		}
 		entries = append(entries, &e)
 	}
+	for _, entry := range entries {
+		switch e := entry.(type) {
+		case map[string]any:
+			ref, _ := e["slug"].(string)
+			ApplyModelOverrides(e, ref)
+		case *model:
+			if text := work.ModelCodexInstructions[e.Slug]; text != "" {
+				e.Instructions = text
+				if e.Messages != nil {
+					e.Messages = maps.Clone(e.Messages)
+					e.Messages["instructions_template"] = text
+				}
+			}
+		}
+	}
 	return entries
+}
+
+// ApplyInstructions applies the user's Codex-only instructions to an entry.
+// ref is its provider/model identity, including codex/ for a native slug.
+// Nested messages are copied: cached official entries are shared by models.
+func ApplyInstructions(e map[string]any, ref string) {
+	if text := settings.Shared().ModelCodexInstructions[ref]; text != "" {
+		e["base_instructions"] = text
+		if msgs, ok := e["model_messages"].(map[string]any); ok {
+			msgs = maps.Clone(msgs)
+			msgs["instructions_template"] = text
+			e["model_messages"] = msgs
+		}
+	}
+}
+
+// ApplyModelOverrides applies explicit settings to native/relayed entries,
+// whose untouched fields must remain exactly as their provider lists them.
+func ApplyModelOverrides(e map[string]any, ref string) {
+	s := settings.Shared()
+	ApplyInstructions(e, ref)
+	pid, _, _ := strings.Cut(ref, "/")
+	if n := cmp.Or(s.ModelCompacts[ref], s.ModelCompacts[pid+"/*"]); n > 0 {
+		c := 0
+		switch v := e["context_window"].(type) {
+		case int:
+			c = v
+		case float64:
+			c = int(v)
+		}
+		if c > 0 && n >= c {
+			delete(e, "auto_compact_token_limit")
+		} else {
+			e["auto_compact_token_limit"] = n
+		}
+	}
+	if levels := s.ModelEfforts[ref]; len(levels) > 0 || s.ModelReasonless[ref] {
+		if s.ModelReasonless[ref] {
+			levels = nil
+		}
+		old := map[string]any{}
+		if listed, ok := e["supported_reasoning_levels"].([]any); ok {
+			for _, l := range listed {
+				if entry, ok := l.(map[string]any); ok {
+					ef, _ := entry["effort"].(string)
+					old[ef] = entry
+				}
+			}
+		}
+		out := make([]any, 0, len(levels))
+		for _, ef := range levels {
+			entry, _ := old[ef].(map[string]any)
+			entry = maps.Clone(entry)
+			if entry == nil {
+				entry = map[string]any{"effort": ef}
+			}
+			if _, ok := entry["description"].(string); !ok {
+				entry["description"] = effortLabel(ef)
+			}
+			out = append(out, entry)
+		}
+		e["supported_reasoning_levels"] = out
+		if d, _ := e["default_reasoning_level"].(string); !slices.Contains(levels, d) {
+			e["default_reasoning_level"] = nil
+			if len(levels) > 0 {
+				e["default_reasoning_level"] = ModelDefault(levels, NewSessionEffort())
+			}
+		}
+	}
+	if image, set := s.ModelImages[ref]; set {
+		in, _ := e["input_modalities"].([]any)
+		in = slices.Clone(in)
+		if image && !slices.Contains(in, any("image")) {
+			if len(in) == 0 {
+				in = append(in, "text")
+			}
+			in = append(in, "image")
+		} else if !image {
+			in = slices.DeleteFunc(in, func(v any) bool { return v == "image" })
+			if len(in) == 0 {
+				in = append(in, "text")
+			}
+		}
+		e["input_modalities"] = in
+	}
 }
 
 // ultraHere reports whether magpie's entry for m offers Codex's Ultra
@@ -970,6 +1073,11 @@ func CacheEntries() map[string]map[string]any {
 			out[slug] = m
 		}
 	}
+	if err := RestoreInstructions(out, cache.ETag); err != nil {
+		// A cache whose original instructions are unknown is not an
+		// official source. In particular, never freeze an old override.
+		return nil
+	}
 	if MarkedV1(cache.ETag) {
 		// the versions in it are magpie's, written over the backend's: the
 		// backend's go back, so a list made from this cache after the
@@ -991,6 +1099,168 @@ func CacheEntries() map[string]map[string]any {
 		}))
 	}
 	return out
+}
+
+// Codex serializes the instructions it was handed into models_cache.json.
+// Keep the official fields separately before overriding them, as for the
+// multi-agent version below. Only an explicit save or a fresh backend reply
+// writes this file; rendering a catalog reads it without changing state.
+var instructionsMu sync.Mutex
+
+var originalFields = []string{
+	"base_instructions", "model_messages", "auto_compact_token_limit",
+	"supported_reasoning_levels", "default_reasoning_level", "input_modalities",
+}
+
+func instructionsPath() string {
+	return filepath.Join(appdir.Config(), "codex-original-instructions.json")
+}
+
+func readInstructions() (map[string]map[string]json.RawMessage, error) {
+	b, err := os.ReadFile(instructionsPath())
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, errors.New("Codex original instructions are not an object")
+	}
+	return out, nil
+}
+
+// RestoreInstructions removes our replacements from a cached list before
+// its entries are used as an official source, including by other agents.
+// A list without our ETag marker was not rewritten and is left untouched.
+func RestoreInstructions(entries map[string]map[string]any, etag string) error {
+	if !markedInstructions(etag) || len(entries) == 0 {
+		return nil
+	}
+	instructionsMu.Lock()
+	defer instructionsMu.Unlock()
+	was, err := readInstructions()
+	if err != nil {
+		return fmt.Errorf("read Codex original instructions: %w", err)
+	}
+	for slug, e := range entries {
+		fields, ok := was[slug]
+		if !ok {
+			return fmt.Errorf("Codex original instructions for %s are unknown", slug)
+		}
+		for _, key := range originalFields {
+			delete(e, key)
+			if b, ok := fields[key]; ok {
+				var v any
+				if err := json.Unmarshal(b, &v); err != nil {
+					return err
+				}
+				e[key] = v
+			}
+		}
+	}
+	return nil
+}
+
+// PrepareInstructions preserves an existing Codex cache's official fields
+// before a user saves or removes a replacement. A malformed/unreadable cache
+// is not an empty one and prevents the save.
+func PrepareInstructions() error {
+	b, err := os.ReadFile(catalog.CodexModelsCache())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read Codex model cache: %w", err)
+	}
+	var cache struct {
+		ETag   string           `json:"etag"`
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(b, &cache); err != nil {
+		return fmt.Errorf("read Codex model cache: %w", err)
+	}
+	if cache.Models == nil {
+		return errors.New("Codex model cache has no models array")
+	}
+	own := map[string]map[string]any{}
+	for _, e := range cache.Models {
+		slug, _ := e["slug"].(string)
+		desc, _ := e["description"].(string)
+		if slug != "" && !catalog.MagpieAdded(cache.ETag, slug, desc) {
+			own[slug] = e
+		}
+	}
+	if markedInstructions(cache.ETag) {
+		return RestoreInstructions(own, cache.ETag)
+	}
+	entries := make([]any, 0, len(own))
+	for _, e := range own {
+		entries = append(entries, e)
+	}
+	return saveInstructions(entries, false)
+}
+
+// RememberInstructions records a fresh backend list before replacements
+// are applied. A save failure leaves the previous list in service.
+func RememberInstructions(entries []any) error {
+	return saveInstructions(entries, true)
+}
+
+func saveInstructions(entries []any, fresh bool) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	instructionsMu.Lock()
+	defer instructionsMu.Unlock()
+	unlock, held := filelock.Lock(instructionsPath()+".lock", filelock.Wait)
+	defer unlock()
+	if !held {
+		return errors.New("could not lock Codex original instructions")
+	}
+	was, err := readInstructions()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read Codex original instructions: %w", err)
+	}
+	if was == nil {
+		was = map[string]map[string]json.RawMessage{}
+	}
+	changed := false
+	for _, entry := range entries {
+		e, _ := entry.(map[string]any)
+		slug, _ := e["slug"].(string)
+		if slug == "" || strings.Contains(slug, "/") {
+			continue
+		}
+		if !fresh && was[slug] != nil {
+			continue // Codex's cached list may predate a fresh backend reply.
+		}
+		fields := map[string]json.RawMessage{}
+		for _, key := range originalFields {
+			if v, ok := e[key]; ok {
+				b, err := json.Marshal(v)
+				if err != nil {
+					return err
+				}
+				fields[key] = b
+			}
+		}
+		if !maps.EqualFunc(was[slug], fields, func(a, b json.RawMessage) bool { return bytes.Equal(a, b) }) || was[slug] == nil {
+			was[slug], changed = fields, true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	b, err := json.Marshal(was)
+	if err != nil {
+		return err
+	}
+	if err := edit.WriteAtomic(instructionsPath(), b); err != nil {
+		return fmt.Errorf("save Codex original instructions: %w", err)
+	}
+	return nil
 }
 
 // Codex picks a thread's multi-agent tools by its model's entry: its
@@ -1069,16 +1339,35 @@ func AutoReview(e map[string]any, v string) {
 // the tag's hash, so neither tag is found inside the other (Tagged).
 const v1Mark = "v1."
 
-// PolicyTag is a list's tag with the V1 setting in it.
+const instructionsMark = "i1."
+
+// PolicyTag includes policies that change entries beyond the model specs.
 func PolicyTag(tag string) string {
+	s := settings.Shared()
+	if ModelOverridesOn() {
+		b, _ := json.Marshal([]any{s.ModelCodexInstructions, s.ModelCompacts, s.ModelEfforts, s.ModelReasonless, s.ModelImages})
+		sum := sha256.Sum256(b)
+		tag = instructionsMark + hex.EncodeToString(sum[:8]) + "." + tag
+	}
 	if V1() {
 		return v1Mark + tag
 	}
 	return tag
 }
 
+// ModelOverridesOn reports whether fields needing their original values
+// preserved may be rewritten in a model list.
+func ModelOverridesOn() bool {
+	s := settings.Shared()
+	return len(s.ModelCodexInstructions)+len(s.ModelCompacts)+len(s.ModelEfforts)+len(s.ModelReasonless)+len(s.ModelImages) > 0
+}
+
 // MarkedV1 reports whether an ETag is of a list magpie stamped V1.
 func MarkedV1(etag string) bool { return strings.Contains(etag, tagMark+v1Mark) }
+
+func markedInstructions(etag string) bool {
+	return strings.Contains(etag, tagMark+instructionsMark) || strings.Contains(etag, tagMark+v1Mark+instructionsMark)
+}
 
 // versionsPath keeps the multi_agent_version the backend gave each of the
 // account's models, "" for none, by slug.

@@ -17,7 +17,46 @@ import (
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
+
+func TestCodexMergedInstructionsUseNativeIdentity(t *testing.T) {
+	codexSignedIn(t)
+	s := settings.Load()
+	s.ModelCodexInstructions = map[string]string{"codex/gpt-5.5": "my Codex instructions"}
+	s.ModelCompacts = map[string]int{"codex/gpt-5.5": 100000}
+	s.ModelEfforts = map[string][]string{"codex/gpt-5.5": {"high"}}
+	s.ModelImages = map[string]bool{"codex/gpt-5.5": false}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	for _, cached := range []bool{false, true} {
+		own := []any{map[string]any{
+			"slug": "gpt-5.5", "visibility": "list", "base_instructions": "official base",
+			"model_messages":             map[string]any{"instructions_template": "official template"},
+			"context_window":             200000,
+			"supported_reasoning_levels": []any{map[string]any{"effort": "low"}, map[string]any{"effort": "high"}},
+			"default_reasoning_level":    "low", "input_modalities": []any{"text", "image"},
+		}}
+		found := false
+		for _, entry := range codexMerged(own, cached) {
+			e, ok := entry.(map[string]any)
+			if !ok || e["slug"] != "gpt-5.5" {
+				continue
+			}
+			found = true
+			if e["base_instructions"] != "my Codex instructions" || e["model_messages"].(map[string]any)["instructions_template"] != "my Codex instructions" {
+				t.Fatalf("native entry was not overridden (cached=%t): %v", cached, e)
+			}
+			if e["auto_compact_token_limit"] != 100000 || e["default_reasoning_level"] != "high" || len(e["input_modalities"].([]any)) != 1 || len(e["supported_reasoning_levels"].([]any)) != 1 {
+				t.Fatalf("native preferences were not applied (cached=%t): %v", cached, e)
+			}
+		}
+		if !found {
+			t.Fatal("native model disappeared")
+		}
+	}
+}
 
 // codexDeskReset forgets the backend's list for the Codex app, before the
 // test and after it.

@@ -199,23 +199,32 @@ func codexPromptsPath() string {
 // /codex/models answer, or Codex CLI's models_cache.json, which is one.
 func codexPrompts(b []byte) map[string]string {
 	var list struct {
-		Models []struct {
-			Slug     string `json:"slug"`
-			Base     string `json:"base_instructions"`
-			Messages struct {
-				Template string `json:"instructions_template"`
-			} `json:"model_messages"`
-		} `json:"models"`
+		ETag   string           `json:"etag"`
+		Models []map[string]any `json:"models"`
 	}
 	if json.Unmarshal(b, &list) != nil {
 		return nil
 	}
+	entries := map[string]map[string]any{}
+	for _, e := range list.Models {
+		slug, _ := e["slug"].(string)
+		desc, _ := e["description"].(string)
+		if slug != "" && !catalog.MagpieAdded(list.ETag, slug, desc) {
+			entries[slug] = e
+		}
+	}
+	if err := codexcat.RestoreInstructions(entries, list.ETag); err != nil {
+		return nil
+	}
 	out := map[string]string{}
-	for _, m := range list.Models {
-		if s := m.Messages.Template; s != "" {
-			out[m.Slug] = s
-		} else if m.Base != "" {
-			out[m.Slug] = m.Base
+	for slug, e := range entries {
+		msgs, _ := e["model_messages"].(map[string]any)
+		text, _ := msgs["instructions_template"].(string)
+		if text == "" {
+			text, _ = e["base_instructions"].(string)
+		}
+		if text != "" {
+			out[slug] = text
 		}
 	}
 	return out

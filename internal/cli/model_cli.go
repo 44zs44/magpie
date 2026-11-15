@@ -52,6 +52,14 @@ const modelUsage = `usage:
                                                  value goes back to the vendor's list (magpie model spec --help)
   magpie model spec <provider/model> --reset     take every value you set off this model
   magpie model specs                             the models you gave a spec
+  magpie model codex-import <file> <provider/model> <field>...
+                                                 import selected Codex catalog fields into Magpie settings:
+                                                 base_instructions, model_messages.instructions_template,
+                                                 context_window, auto_compact_token_limit,
+                                                 supported_reasoning_levels, input_modalities
+                                                 only selected fields become preferences. A managed file's first
+                                                 import establishes its baseline; unselected fields regenerate
+                                                 from Magpie settings. Custom files remain yours to maintain.
   magpie model wire <provider/model>             the name the vendor is asked for, and the one you gave
   magpie model wire <provider/model> <name>      ask for the model by this name, for a relay that serves it
   magpie model wire '<provider>/*' <name>        ask for every model of that provider by this name; a * in
@@ -179,6 +187,16 @@ func modelCmd(args []string) error {
 		return modelSpec(args[1:])
 	case "specs":
 		return modelSpecs()
+	case "codex-import":
+		if len(args) < 4 {
+			return fmt.Errorf("usage: magpie model codex-import <file> <provider/model> <field>...")
+		}
+		if err := agent.ImportCodexCatalog(args[1], args[2], args[3:]); err != nil {
+			return err
+		}
+		fmt.Println("Codex catalog fields imported; reload Codex to read its updated catalog")
+		fmt.Println("Only the selected fields were imported. Unselected fields in a previously untracked managed catalog regenerate from Magpie settings; custom files remain user-owned.")
+		return nil
 	case "id":
 		return modelID(args[1:])
 	case "api", "protocol":

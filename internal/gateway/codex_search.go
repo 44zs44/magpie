@@ -45,10 +45,17 @@ type alphaQuery struct {
 }
 
 // alphaSearchReply is Codex's SearchResponse: output is what the model is
-// shown as the tool's result.
+// shown as the tool's result, results are the sources the app displays.
 type alphaSearchReply struct {
-	EncryptedOutput *string `json:"encrypted_output"`
-	Output          string  `json:"output"`
+	EncryptedOutput *string             `json:"encrypted_output"`
+	Output          string              `json:"output"`
+	Results         []alphaSearchResult `json:"results,omitempty"`
+}
+
+type alphaSearchResult struct {
+	Type  string `json:"type"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
 }
 
 // alphaSearch answers POST /v1/alpha/search. A ChatGPT account's model
@@ -228,8 +235,9 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 	}
 	ctx := withWebAccess(context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: q.Model}), q.Settings.ExternalWebAccess)
 	var said []string
+	var results []alphaSearchResult
 	for _, query := range queries {
-		found, _, err := s.webSearch(ctx, query)
+		found, hits, err := s.webSearch(ctx, query)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return
@@ -246,6 +254,11 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 			found = "Search: " + query + "\n" + found
 		}
 		said = append(said, found)
+		for _, hit := range hits {
+			if hit.URL != "" {
+				results = append(results, alphaSearchResult{Type: "text_result", URL: hit.URL, Title: hit.Title})
+			}
+		}
 	}
-	writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + strings.Join(said, "\n\n")})
+	writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + strings.Join(said, "\n\n"), Results: results})
 }

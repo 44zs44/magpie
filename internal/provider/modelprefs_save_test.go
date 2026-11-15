@@ -57,3 +57,44 @@ func TestSetModelPrefs(t *testing.T) {
 		t.Fatalf("names %v, told %d times", settings.Load().ModelNames, touched)
 	}
 }
+
+func TestSetCodexModelInstructions(t *testing.T) {
+	prefsHome(t)
+	touched := 0
+	was := catalog.Changed
+	catalog.Changed = func() { touched++ }
+	t.Cleanup(func() { catalog.Changed = was })
+	text := "  Keep this text verbatim.\n"
+	if err := SetCodexModelInstructions("a/sol", text); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Load().ModelCodexInstructions["a/sol"] != text || touched != 1 {
+		t.Fatalf("instructions not saved verbatim, notifications: %d", touched)
+	}
+	if settings.Load().ModelSystemPrompts["a/sol"] != "" {
+		t.Fatal("Codex instructions changed the cross-agent appended prompt")
+	}
+	before := CodexListTag()
+	if err := SetCodexModelInstructions("a/sol", text); err != nil || touched != 1 {
+		t.Fatalf("unchanged instructions were saved: %v, notifications %d", err, touched)
+	}
+	for _, bad := range []struct{ ref, text string }{
+		{"a/nope", "instructions"}, {"a/sol", "has\x00nul"}, {"a/sol", strings.Repeat("x", maxModelSystemPrompt+1)},
+	} {
+		if err := SetCodexModelInstructions(bad.ref, bad.text); err == nil {
+			t.Fatalf("accepted invalid instructions for %s", bad.ref)
+		}
+	}
+	if err := SetCodexModelInstructions("a/sol", "new instructions"); err != nil {
+		t.Fatal(err)
+	}
+	if CodexListTag() == before {
+		t.Fatal("changing instructions did not invalidate the model-list ETag")
+	}
+	if err := SetCodexModelInstructions("a/sol", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := settings.Load().ModelCodexInstructions["a/sol"]; ok {
+		t.Fatal("reset did not remove the override")
+	}
+}

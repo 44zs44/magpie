@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -136,6 +137,194 @@ func TestModelSpecRefusalWritesNothing(t *testing.T) {
 		}
 		if got := specFiles(t); got != before {
 			t.Fatalf("%s: a refused spec wrote:\nbefore %s\nafter  %s", name, before, got)
+		}
+	}
+}
+
+func TestCodexCatalogEditsPersistInModelSettings(t *testing.T) {
+	specHome(t)
+	const ref = "kenari/glm-5:free"
+	edits := map[string]map[string]json.RawMessage{ref: {
+		"base_instructions":          json.RawMessage(`"  Custom Codex instructions.\n"`),
+		"context_window":             json.RawMessage(`131072`),
+		"auto_compact_token_limit":   json.RawMessage(`100000`),
+		"supported_reasoning_levels": json.RawMessage(`[{"effort":"low","description":"Less"},{"effort":"high","description":"More"}]`),
+		"input_modalities":           json.RawMessage(`["text","image"]`),
+	}}
+	if err := ApplyCodexModelEdits(edits); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := EntryOf(ref)
+	if !ok || e.Context != 131072 || !e.Images || !slices.Equal(e.Efforts, []string{"low", "high"}) {
+		t.Fatalf("the gateway's model did not take the catalog edit: %+v", e)
+	}
+	s := settings.Load()
+	if s.ModelCompacts[ref] != 100000 || s.ModelCodexInstructions[ref] != "  Custom Codex instructions.\n" {
+		t.Fatalf("compact/prompt were not persisted verbatim: %d %q", s.ModelCompacts[ref], s.ModelCodexInstructions[ref])
+	}
+	state, err := CodexModelEditState(ref)
+	if err != nil || len(state) != 5 {
+		t.Fatalf("explicit state: %v %v", state, err)
+	}
+	other, err := CodexModelEditState("kenari/qwen-x:free")
+	if err != nil || len(other) != 0 {
+		t.Fatalf("unedited sibling has settings: %v %v", other, err)
+	}
+	before := specFiles(t)
+	told := 0
+	catalog.Changed = func() { told++ }
+	t.Cleanup(func() { catalog.Changed = nil })
+	if err := ApplyCodexModelEdits(edits); err != nil {
+		t.Fatal(err)
+	}
+	if told != 0 || specFiles(t) != before {
+		t.Fatal("retrying the same import rewrote configuration or notified agents")
+	}
+	for field := range edits[ref] {
+		edits[ref][field] = json.RawMessage(`null`)
+	}
+	if err := ApplyCodexModelEdits(edits); err != nil {
+		t.Fatal(err)
+	}
+	state, err = CodexModelEditState(ref)
+	if err != nil || len(state) != 0 {
+		t.Fatalf("cleared overrides remain: %v %v", state, err)
+	}
+	e, _ = EntryOf(ref)
+	if e.Context != 0 || e.Images || len(e.Efforts) != 0 {
+		t.Fatalf("removing overrides did not restore vendor defaults: %+v", e)
+	}
+}
+
+func TestCodexCatalogEditsRefuseWholeInvalidImport(t *testing.T) {
+	specHome(t)
+	before := specFiles(t)
+	for _, fields := range []map[string]json.RawMessage{
+		{"context_window": json.RawMessage(`-1`)},
+		{"context_window": json.RawMessage(`1.5`)},
+		{"context_window": json.RawMessage(`"131072"`)},
+		{"auto_compact_token_limit": json.RawMessage(`false`)},
+		{"base_instructions": json.RawMessage(`{"text":"bad"}`)},
+		{"base_instructions": json.RawMessage(`"NUL\u0000"`)},
+		{"supported_reasoning_levels": json.RawMessage(`[{"effort":"turbo"}]`)},
+		{"supported_reasoning_levels": json.RawMessage(`[{}]`)},
+		{"input_modalities": json.RawMessage(`["text","audio"]`)},
+		{"input_modalities": json.RawMessage(`[]`)},
+		{"slug": json.RawMessage(`"other/model"`)},
+	} {
+		edits := map[string]map[string]json.RawMessage{
+			"kenari/glm-5:free":  {"context_window": json.RawMessage(`131072`), "base_instructions": json.RawMessage(`"Valid"`)},
+			"kenari/qwen-x:free": fields,
+		}
+		if err := ApplyCodexModelEdits(edits); err == nil {
+			t.Errorf("invalid fields accepted: %v", fields)
+		}
+		if specFiles(t) != before {
+			t.Fatalf("invalid import wrote configuration: %v", fields)
+		}
+	}
+	if err := ApplyCodexModelEdits(map[string]map[string]json.RawMessage{"kenari/no-such-model": {"context_window": json.RawMessage(`10000`)}}); err == nil {
+		t.Fatal("unknown model accepted")
+	}
+}
+
+func TestCodexCatalogEditsGroupLeavesMembersAlone(t *testing.T) {
+	specHome(t)
+	if err := SaveGroup(Group{ID: "my-models", Name: "My models", Members: []string{"kenari/glm-5:free", "kenari/qwen-x:free"}}); err != nil {
+		t.Fatal(err)
+	}
+	edits := map[string]map[string]json.RawMessage{"group/my-models": {
+		"context_window": json.RawMessage(`131072`), "auto_compact_token_limit": json.RawMessage(`100000`),
+		"supported_reasoning_levels": json.RawMessage(`[{"effort":"low"},{"effort":"high"}]`),
+		"base_instructions":          json.RawMessage(`"Group instructions"`),
+	}}
+	if err := ApplyCodexModelEdits(edits); err != nil {
+		t.Fatal(err)
+	}
+	g, _, ok := FindGroup("group/my-models")
+	if !ok || g.Context != 131072 || g.Compact != 100000 || !slices.Equal(g.Levels, []string{"low", "high"}) {
+		t.Fatalf("group settings: %+v", g)
+	}
+	state, err := CodexModelEditState("group/my-models")
+	if err != nil || len(state) != 4 {
+		t.Fatalf("group explicit state: %v %v", state, err)
+	}
+	for _, ref := range g.Members {
+		member, err := CodexModelEditState(ref)
+		if err != nil || !reflect.DeepEqual(member, map[string]json.RawMessage{}) {
+			t.Fatalf("a group import changed its member %s: %v %v", ref, member, err)
+		}
+	}
+	before := specFiles(t)
+	if err := ApplyCodexModelEdits(map[string]map[string]json.RawMessage{"group/my-models": {"input_modalities": json.RawMessage(`["text"]`)}}); err == nil {
+		t.Fatal("group image support accepted without a group setting")
+	}
+	if specFiles(t) != before {
+		t.Fatal("refused group edit changed configuration")
+	}
+}
+
+func TestCodexCatalogEditsRetryAfterProviderWriteFails(t *testing.T) {
+	specHome(t)
+	const ref = "kenari/glm-5:free"
+	backup := Path() + ".bak"
+	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	// The provider file remains readable, but its mandatory backup cannot
+	// be replaced. This fails after the independent settings save.
+	if err := os.Mkdir(backup, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	edits := map[string]map[string]json.RawMessage{ref: {
+		"context_window": json.RawMessage(`131072`), "auto_compact_token_limit": json.RawMessage(`100000`),
+		"input_modalities": json.RawMessage(`["text","image"]`),
+	}}
+	if err := ApplyCodexModelEdits(edits); err == nil {
+		t.Fatal("provider storage failure was hidden")
+	}
+	s := settings.Load()
+	p, err := Find("kenari")
+	if err != nil || p.Contexts["glm-5:free"] != 0 || s.ModelCompacts[ref] != 100000 || !s.ModelImages[ref] {
+		t.Fatalf("unexpected partial import: provider %v, settings %v, error %v", p.Contexts, s.ModelCompacts, err)
+	}
+	if err := os.Remove(backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyCodexModelEdits(edits); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := EntryOf(ref)
+	if !ok || e.Context != 131072 || !e.Images {
+		t.Fatalf("retry did not complete the import: %+v", e)
+	}
+	before := specFiles(t)
+	if err := ApplyCodexModelEdits(edits); err != nil || specFiles(t) != before {
+		t.Fatalf("completed import was not idempotent: %v", err)
+	}
+}
+
+func TestCodexCatalogEditsNeedReadableOriginalsBeforeSaving(t *testing.T) {
+	specHome(t)
+	cache := catalog.CodexModelsCache()
+	if err := os.MkdirAll(filepath.Dir(cache), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cache, []byte(`{"models":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := specFiles(t)
+	for field, raw := range map[string]json.RawMessage{
+		"context_window":             json.RawMessage(`131072`),
+		"auto_compact_token_limit":   json.RawMessage(`100000`),
+		"supported_reasoning_levels": json.RawMessage(`[{"effort":"low"}]`),
+		"input_modalities":           json.RawMessage(`["text","image"]`),
+	} {
+		if err := ApplyCodexModelEdits(map[string]map[string]json.RawMessage{"kenari/glm-5:free": {field: raw}}); err == nil {
+			t.Errorf("%s saved without preserving the unreadable original catalog", field)
+		}
+		if specFiles(t) != before {
+			t.Fatalf("%s changed configuration despite unreadable originals", field)
 		}
 	}
 }

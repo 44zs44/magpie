@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -36,9 +37,9 @@ func codexSearchPost(h http.Handler, path, body string) *httptest.ResponseRecord
 }
 
 type searchReply struct {
-	EncryptedOutput *string `json:"encrypted_output"`
-	Output          string  `json:"output"`
-	Results         []any   `json:"results"`
+	EncryptedOutput *string          `json:"encrypted_output"`
+	Output          string           `json:"output"`
+	Results         []map[string]any `json:"results"`
 }
 
 func readSearchReply(t *testing.T, w *httptest.ResponseRecorder) searchReply {
@@ -94,6 +95,9 @@ func TestCodexWebRunSearchesOnChatGPTAccount(t *testing.T) {
 		if got.Output != "OpenAI news from acct-2" || got.EncryptedOutput == nil || *got.EncryptedOutput != "ciphertext" || len(got.Results) != 1 {
 			t.Fatalf("%s: answered %+v", path, got)
 		}
+		if want := map[string]any{"type": "text_result", "ref_id": "turn0search0", "url": "https://example.com/result"}; !reflect.DeepEqual(got.Results[0], want) {
+			t.Fatalf("%s: upstream source changed: %v", path, got.Results)
+		}
 		if strings.Join(tried, ",") != "acct-1,acct-2" {
 			t.Fatalf("%s: accounts asked %v", path, tried)
 		}
@@ -141,6 +145,9 @@ func TestCodexWebRunChatGPTFailsSearchedByMagpie(t *testing.T) {
 		!strings.Contains(got.Output, "go1.27.1 is the latest release.") {
 		t.Fatalf("answered %q", got.Output)
 	}
+	if want := []map[string]any{{"type": "text_result", "url": "https://go.dev/dl/", "title": "Go downloads"}}; !reflect.DeepEqual(got.Results, want) {
+		t.Fatalf("fallback sources: got %v, want %v", got.Results, want)
+	}
 }
 
 // web.run on a model no ChatGPT account serves: its search_query is
@@ -160,7 +167,7 @@ func TestCodexWebRunOnOtherModelSearchedByMagpie(t *testing.T) {
 	t.Cleanup(func() { provider.CodexBase = was })
 	h := New().Handler()
 	got := readSearchReply(t, codexSearchPost(h, "/v1/alpha/search", codexSearchBody("deepseek/deepseek-v4")))
-	if !strings.Contains(got.Output, "Settings → Models → Web search") || got.EncryptedOutput != nil {
+	if !strings.Contains(got.Output, "Settings → Models → Web search") || got.EncryptedOutput != nil || len(got.Results) != 0 {
 		t.Fatalf("no searcher: %+v", got)
 	}
 	apis := newSearchAPIs(t)
@@ -171,19 +178,82 @@ func TestCodexWebRunOnOtherModelSearchedByMagpie(t *testing.T) {
 	if !strings.Contains(got.Output, "Go downloads") || !strings.Contains(got.Output, "go1.27.1 is the latest release.") {
 		t.Fatalf("searched: %+v", got)
 	}
+	want := []map[string]any{{"type": "text_result", "url": "https://go.dev/dl/", "title": "Go downloads"}}
+	if !reflect.DeepEqual(got.Results, want) {
+		t.Fatalf("sources: got %v, want %v", got.Results, want)
+	}
 	if strings.Join(apis.asked, "|") != "tavily: OpenAI news site:openai.com" {
 		t.Fatalf("asked %q", apis.asked)
 	}
 	// a magpie model through Codex's ChatGPT path is searched the same
 	got = readSearchReply(t, codexSearchPost(h, CodexPath+"/alpha/search", codexSearchBody("deepseek/deepseek-v4")))
-	if !strings.Contains(got.Output, "go1.27.1") {
+	if !strings.Contains(got.Output, "go1.27.1") || !reflect.DeepEqual(got.Results, want) {
 		t.Fatalf("on %s: %+v", CodexPath, got)
 	}
 	got = readSearchReply(t, codexSearchPost(h, "/v1/alpha/search", `{"id":"s","model":"deepseek/deepseek-v4","commands":{"open":[{"ref_id":"https://openai.com"}]}}`))
-	if !strings.Contains(got.Output, "search_query") {
+	if !strings.Contains(got.Output, "search_query") || len(got.Results) != 0 {
 		t.Fatalf("open alone: %+v", got)
 	}
 	if w := codexSearchPost(h, "/v1/alpha/search", `nope`); w.Code != 400 {
 		t.Fatalf("not JSON: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A failed or empty query loses none of its siblings' sources. The text
+// still tells the model what each query found, including each failure.
+func TestCodexWebRunKeepsSourcesAcrossQueries(t *testing.T) {
+	fresh(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var q struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch q.Query {
+		case "Go downloads":
+			io.WriteString(w, `{"results":[{"title":"Go downloads","url":"https://go.dev/dl/","content":"go1.27.1 is the latest release."}]}`)
+		case "Go docs":
+			io.WriteString(w, `{"results":[{"title":"Go documentation","url":"https://go.dev/doc/","content":"The Go programming language documentation."}]}`)
+		case "empty":
+			io.WriteString(w, `{"results":[]}`)
+		case "failed":
+			http.Error(w, `{"detail":{"error":"down"}}`, http.StatusInternalServerError)
+		default:
+			t.Errorf("unexpected query %q", q.Query)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.SetSearchAPI(provider.SearchAPI{Vendor: "tavily", Key: "test-key", URL: up.URL}); err != nil {
+		t.Fatal(err)
+	}
+	st := settings.Load()
+	st.Searcher = "off"
+	if err := settings.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	h := New().Handler()
+	for _, path := range []string{"/alpha/search", "/v1/alpha/search", CodexPath + "/alpha/search"} {
+		got := readSearchReply(t, codexSearchPost(h, path, `{"model":"deepseek/deepseek-v4","commands":{"search_query":[{"q":"Go downloads"},{"q":"empty"},{"q":"failed"},{"q":"Go docs"}]}}`))
+		want := []map[string]any{
+			{"type": "text_result", "url": "https://go.dev/dl/", "title": "Go downloads"},
+			{"type": "text_result", "url": "https://go.dev/doc/", "title": "Go documentation"},
+		}
+		if !reflect.DeepEqual(got.Results, want) {
+			t.Errorf("%s: sources got %v, want %v", path, got.Results, want)
+		}
+		for _, text := range []string{"Search: Go downloads\n", "go1.27.1 is the latest release.", "couldn't search the web for empty", "found nothing", "couldn't search the web for failed", "down", "Search: Go docs\n", "The Go programming language documentation."} {
+			if !strings.Contains(got.Output, text) {
+				t.Errorf("%s: output lacks %q: %s", path, text, got.Output)
+			}
+		}
+		got = readSearchReply(t, codexSearchPost(h, path, `{"model":"deepseek/deepseek-v4","commands":{"search_query":[{"q":"empty"}]}}`))
+		if len(got.Results) != 0 || !strings.Contains(got.Output, "found nothing") {
+			t.Errorf("%s: empty search invented sources or lost its explanation: %+v", path, got)
+		}
 	}
 }
