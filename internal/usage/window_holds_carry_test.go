@@ -13,6 +13,17 @@ import (
 // restart.
 func TestWholeKeptAcrossReset(t *testing.T) {
 	holdsHome(t)
+	// The fixed clock can precede another test's last write; this fresh
+	// home must not inherit that process-wide persistence throttle.
+	carry.Lock()
+	wroteAt := carry.wroteAt
+	carry.wroteAt = time.Time{}
+	carry.Unlock()
+	t.Cleanup(func() {
+		carry.Lock()
+		carry.wroteAt = wroteAt
+		carry.Unlock()
+	})
 	now := holdClock(t, time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
 	kimi := Record{Agent: "claude-code", Provider: "kimi-code", ProviderAccount: "mu@example.com", Status: 200}
 	call := func(ago time.Duration, in, out int) {

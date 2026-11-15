@@ -157,7 +157,13 @@ func TestScriptFindsClaudeMoved(t *testing.T) {
 	fakeClaude(t, filepath.Join(home, "Applications"), out)
 	dir := filepath.Join(home, "iso-3p")
 	s := filepath.Join(home, "run.sh")
-	os.WriteFile(s, []byte(Script(filepath.Join(home, "Gone", "Claude.app"), "Claude", dir, "")), 0o755)
+	script := Script(filepath.Join(home, "Gone", "Claude.app"), "Claude", dir, "")
+	// The system fallback must not start the runner's installed Claude.
+	if strings.Count(script, " /Applications/Claude.app ") != 1 {
+		t.Fatal("the script's system fallback changed; isolate it before running")
+	}
+	script = strings.Replace(script, " /Applications/Claude.app ", ` "$HOME/System/Applications/Claude.app" `, 1)
+	os.WriteFile(s, []byte(script), 0o755)
 	if b, err := exec.Command(s).CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, b)
 	}

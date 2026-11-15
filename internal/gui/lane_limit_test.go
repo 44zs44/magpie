@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func TestLaneLimitRoutes(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("MAGPIE_ADDR", "127.0.0.1:"+strconv.Itoa(freePort(t)))
 	p := provider.Provider{ID: "lane-test", Name: "Lane", Chat: "https://example.invalid/v1", Key: "primary", Keys: []provider.KeyAccount{{Key: "second"}}}
 	if err := provider.Save(p); err != nil {
 		t.Fatal(err)

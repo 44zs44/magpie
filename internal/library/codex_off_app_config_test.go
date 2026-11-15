@@ -2,8 +2,11 @@ package library
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/yetone/magpie/internal/agent"
 )
@@ -87,10 +90,17 @@ func TestCodexOffKeepsAppsOwnConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			off := read(t, path)
-			for _, l := range strings.Split(codexAppOwnConfig, "\n") {
-				if l = strings.TrimSpace(l); l != "" && !strings.Contains(off, l) {
-					t.Errorf("lost %q", l)
-				}
+			// Imported servers are serialized again: inline env tables and
+			// quoted strings may differ while retaining the same TOML values.
+			var want, got map[string]any
+			if err := toml.Unmarshal([]byte(codexAppOwnConfig+"\n[mcp_servers.mem]\ncommand = \"node\"\nargs = [\"server.js\"]\n"), &want); err != nil {
+				t.Fatal(err)
+			}
+			if err := toml.Unmarshal([]byte(off), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Error("restored config differs from the app's config and the saved mem server")
 			}
 			if t.Failed() {
 				t.Logf("on magpie:\n%s\n\noff:\n%s", on, off)

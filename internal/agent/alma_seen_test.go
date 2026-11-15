@@ -15,6 +15,15 @@ import (
 // providers again from the answer kept 5s. A new answer (Alma asked again
 // after a change) is decoded anew.
 func TestAlmaProvidersSeenDecodeOnce(t *testing.T) {
+	// Build the fixture outside the allocation measurement: a fresh HTTP
+	// answer should measure its decoding, not the fake server's formatting.
+	var known strings.Builder
+	for i := range 400 {
+		if i > 0 {
+			known.WriteString(",")
+		}
+		fmt.Fprintf(&known, `{"id":"m-%d","name":"Model %d","capabilityOverrides":{"vision":true,"functionCalling":true}}`, i, i)
+	}
 	var mu sync.Mutex
 	gets, model := 0, "gpt-5.4"
 	asked := func() int { mu.Lock(); defer mu.Unlock(); return gets }
@@ -28,12 +37,7 @@ func TestAlmaProvidersSeenDecodeOnce(t *testing.T) {
 		mu.Unlock()
 		var b strings.Builder
 		b.WriteString(`[{"id":"mg","name":"magpie","type":"openai","baseURL":"http://x/v1","enabled":true,"models":["` + m + `"],"availableModels":[`)
-		for i := range 400 {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			fmt.Fprintf(&b, `{"id":"m-%d","name":"Model %d","capabilityOverrides":{"vision":true,"functionCalling":true}}`, i, i)
-		}
+		b.WriteString(known.String())
 		b.WriteString(`]}]`)
 		rw.Write([]byte(b.String()))
 	}))
