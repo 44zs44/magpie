@@ -59,11 +59,11 @@ func TestModelSpeedRankIsTheMedianOfFairRequests(t *testing.T) {
 			if len(got) != 3 || got[0].Model != "quick" || got[1].Model != "gpt" || got[2].Model != "burst" {
 				t.Fatalf("ranked %+v, want quick, gpt, burst", got)
 			}
-			if q := got[0]; offBin(q.Speed, 266.7) || offBin(float64(q.TTFT), 300) || q.Requests != 1 {
+			if q := got[0]; offBin(q.Speed, 800.0/3.3) || offBin(float64(q.TTFT), 300) || q.Requests != 1 {
 				t.Fatalf("quick: %+v", q)
 			}
-			// median of 40, 50, 60.002 and 5,000; of 1, 2, 3 and 4 s
-			if g := got[1]; offBin(g.Speed, 55) || offBin(float64(g.TTFT), 2500) || g.Requests != 4 || g.SpeedN != 4 {
+			// Whole-request rates: median of 34.48, 38.46, 40.54 and 1,428.57.
+			if g := got[1]; offBin(g.Speed, (500.0/13+500.0/12.333)/2) || offBin(float64(g.TTFT), 2500) || g.Requests != 4 || g.SpeedN != 4 {
 				t.Fatalf("gpt: %+v", g)
 			}
 			if b := got[2]; b.Speed != 0 || b.SpeedN != 0 || offBin(float64(b.TTFT), 500) || b.Requests != 1 {
@@ -105,14 +105,14 @@ func TestModelSpeedRankMergesAndSurvivesTheFile(t *testing.T) {
 		return &Row{Record: Record{Model: "gpt", Output: out, TTFT: ttft, Millis: ms, Status: 200}}
 	}
 	a, b := speedRank{}, speedRank{}
-	a.add(row(500, 1000, 11000)) // 50 tok/s
-	b.add(row(500, 3000, 13000)) // 50 tok/s, a slower start
-	b.add(row(500, 2000, 7000))  // 100 tok/s
+	a.add(row(500, 1000, 11000)) // 45.45 tok/s
+	b.add(row(500, 3000, 13000)) // 38.46 tok/s, a slower start
+	b.add(row(500, 2000, 7000))  // 71.43 tok/s
 	part := addCells(&chunkPart{speeds: a}, &chunkPart{speeds: b})
 	disk := pageDiskPart(pageDiskEntry{Speeds: part.speeds})
 	for name, rank := range map[string]speedRank{"merged": part.speeds, "file": disk.speeds} {
 		got := rank.result()
-		if len(got) != 1 || got[0].Requests != 3 || got[0].SpeedN != 3 || offBin(got[0].Speed, 50) || offBin(float64(got[0].TTFT), 2000) {
+		if len(got) != 1 || got[0].Requests != 3 || got[0].SpeedN != 3 || offBin(got[0].Speed, 500.0/11) || offBin(float64(got[0].TTFT), 2000) {
 			t.Fatalf("%s: %+v", name, got)
 		}
 	}

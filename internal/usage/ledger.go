@@ -989,12 +989,16 @@ func (r Row) codexTurn() bool {
 	return r.Source == "log" && r.Agent == "codex" && r.TTFT > 0
 }
 
-// Decode is the row's DecodeOf, a Codex turn of one call from its session
-// file held to CodexWindowMs and CodexBodyTokens.
+// Decode keeps DecodeOf's tokens and sample checks, including a Codex
+// turn's minimum window and body, but reports speed over the whole request.
+// Queueing, retries and the first-token wait are already included in Millis.
 func (r Row) Decode() (tokens int, w int64) {
 	n, w := r.Record.Decode()
 	if w > 0 && r.codexTurn() && (w < CodexWindowMs || n < CodexBodyTokens) {
 		return 0, 0
+	}
+	if w > 0 {
+		return n, r.Millis
 	}
 	return n, w
 }
@@ -1022,6 +1026,8 @@ func (r Row) Decode() (tokens int, w int64) {
 // token, reads 600 tok/s so, its measured answer 415, and this 329. That
 // window is held to what a measured one is (CodexWindowMs, CodexBodyTokens):
 // 827 ms can be one push as well.
+// This window only qualifies the sample; Floor returns the whole request's
+// Millis, including the wait, as the displayed measured speed does.
 //
 // A Codex turn of one call that tells neither, its window after the first
 // token too short or its body too small, tells its output over the whole
@@ -1040,7 +1046,7 @@ func (r Row) Floor() (tokens int, ms int64) {
 	if r.codexTurn() {
 		if n := r.Output - r.Reasoning; r.Reasoning > 0 && n >= CodexBodyTokens {
 			if w := DecodeWindow(n, r.Millis, r.TTFT); w >= CodexWindowMs {
-				return n, w
+				return n, r.Millis
 			}
 		}
 	}

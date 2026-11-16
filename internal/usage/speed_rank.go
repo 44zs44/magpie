@@ -14,7 +14,7 @@ import (
 const MinRankTokens = 100
 
 // ModelSpeed is one model's place in the speed ranking: the median of its
-// requests' output tokens a second after the first, and of the wait for the
+// requests' counted tokens a second over their whole time, and of the wait for the
 // first token, over the requests that count. Median, so one stalled or one
 // burst reply doesn't move it. Both are read off a histogram of 2% bins, so
 // a median is within 1% of the exact one.

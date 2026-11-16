@@ -539,7 +539,8 @@ function routingPage(part) {
     if (flow > 0 && flow * 4 < w) return null;
     if (w < 1000 && from > 4 * w) return null;
     if (think > 0 && firstText > 0 && n * (firstText - ttft) > 20 * think * w) return null;
-    return { n, w };
+    // Only the displayed rate changes; sample checks still use the stream.
+    return { n, w: ms };
   }
   const reasoningOf = (r) => r.reasoning ?? (r.usage?.length ? r.usage[r.usage.length - 1].reasoning || 0 : 0);
   const speedOf = (r, ms = r.ms, ttft = r.ttft, firstText = r.firstText, flow = r.flow, firstReasoning = r.firstReasoning, reasoningHidden = r.reasoningHidden) => {
@@ -554,11 +555,12 @@ function routingPage(part) {
   // its content came in a burst; else its output over its whole time, from
   // the request to its last token, when that is 1,000 tokens or more over a
   // second or more. answer says which. null when it tells none.
+  // Sample checks stay as above; both floors use the whole request's time.
   function floorOf(r) {
     if (speedOf(r)) return null;
     const out = r.out || 0, ms = r.ms || 0, ttft = r.ttft || 0, think = reasoningOf(r);
     const n = out - think, w = ms - ttft;
-    if (ttft > 0 && think > 0 && !(r.firstText > 0) && n >= 100 && w >= 1000 && n * 1000 <= 10000 * w && !(r.flow > 0 && r.flow * 4 < w)) return { n, w, answer: true };
+    if (ttft > 0 && think > 0 && !(r.firstText > 0) && n >= 100 && w >= 1000 && n * 1000 <= 10000 * w && !(r.flow > 0 && r.flow * 4 < w)) return { n, w: ms, answer: true };
     return out >= 1000 && ms >= 1000 && out * 1000 <= 10000 * ms ? { n: out, w: ms } : null;
   }
   // rowSpeed is a done request's speed as its row says it: measured, else
@@ -571,7 +573,7 @@ function routingPage(part) {
     if (!f) return null;
     return {
       v: f.n * 1000 / f.w, text: "≥" + t("{n} tok/s", { n: Math.round(f.n * 1000 / f.w) }),
-      title: f.answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. No first text was recorded, so reasoning after the first token is counted too", { n: ledNum(f.n), ms: took(f.w), r: ledNum(reasoningOf(r)) })
+      title: f.answer ? t("At least: {n} answer tokens in {ms} over the whole request, the {r} reasoning tokens left out. No first text was recorded", { n: ledNum(f.n), ms: took(f.w), r: ledNum(reasoningOf(r)) })
         : t("At least: {n} output tokens in {ms}, from the request to its last token, the wait for the first one counted too", { n: ledNum(f.n), ms: took(f.w) }),
     };
   }
@@ -610,9 +612,8 @@ function routingPage(part) {
   }
   function requestMetrics(r, how) {
     const { prompt, read } = r.done ? promptOf(r) : { prompt: 0, read: 0 };
-    // Both times start at the request, so subtracting them leaves the
-    // reply's decode window even after a retry. Output is the reply's,
-    // not the prompt or the output of earlier billable tries.
+    // The rate includes the whole request's wait and retries. Output is
+    // the reply's, not the prompt or earlier billable tries' output.
     const speed = rowSpeed(r, how);
     const values = {
       duration: ["duration", "Duration", r.done && r.ms ? took(r.ms) : "—", ""],
@@ -621,7 +622,7 @@ function routingPage(part) {
       cache: ["cache-hit", "Cache", prompt ? hitPct(read / prompt) : "—",
         t("Cache hit rate") + ": " + t("The share of the prompt read from the cache")],
       speed: ["speed", "Speed", speed ? speed.text : "—", speed?.title ||
-        t("Output tokens a second after the first, over the streamed replies") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed")],
+        t("Output tokens a second over each request's whole time") + ". " + t("A reply with answer text counts only answer tokens; reasoning tokens are excluded") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed")],
       cost: ["cost", "Cost", routeCost(r), [r.priced ? costNote() : routeCredits([r]) ? "" : t("No known price or token counts for this request"), routeCredits([r]) ? creditsNote() : ""].filter(Boolean).join("\n")],
     };
     return visibleMetrics.map((key) => values[key]).filter((metric) => metric[2] !== "—");
@@ -4344,7 +4345,7 @@ function routingPage(part) {
       if (g.key && visibleMetrics.includes("cache") && total.prompt) meta.push(metricElement(["cache-hit", "Avg. cache", hitPct(total.read / total.prompt),
         t("Total cache reads divided by total prompt tokens; larger prompts carry more weight") + "\n" + coverage(total.cached)]));
       if (g.key && visibleMetrics.includes("speed") && total.decodeMs) meta.push(metricElement(["speed", "Avg. speed", t("{n} tok/s", { n: Math.round(total.decodeOut * 1000 / total.decodeMs) }),
-        tipLines(t("Total output tokens divided by the time from each reply's first token to its end; the wait for the first token, and replies without usable timing, are left out") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed"),
+        tipLines(t("Counted output tokens divided by the sum of whole request times; replies without usable timing are left out") + ". " + t("A reply with answer text counts only answer tokens; reasoning tokens are excluded") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed"),
           total.wholeMs ? t("Over each request's whole time, the wait for the first token and the reasoning counted: {n} tok/s", { n: Math.round(total.wholeOut * 1000 / total.wholeMs) }) : "", coverage(total.timed))]));
       const metaSig = JSON.stringify([bits, tokenHelp, meta.map((e) => [e.textContent, e.title])]);
       if (x.meta.dataset.sig !== metaSig) { x.meta.replaceChildren(...meta); x.meta.dataset.sig = metaSig; }

@@ -592,10 +592,10 @@ type Totals struct {
 	Credits  float64 `json:"credits,omitempty"`
 	Credited int     `json:"credited,omitempty"`
 	// Timed: the answered calls whose first token was timed (streamed),
-	// TTFT the sum of their ttft_ms; DecodeMs the time from it to the end
-	// of those that wrote any, over which DecodeOut tokens came (a
-	// reasoning reply's answer, Record.Decode): their mean wait, and how
-	// fast they wrote (#196)
+	// TTFT the sum of their ttft_ms; DecodeMs the whole duration of the
+	// replies whose speed is counted, over which DecodeOut tokens came
+	// (a reasoning reply's answer, Row.Decode). The JSON field names are
+	// retained; DecodeMs now includes the wait before output too.
 	Timed     int   `json:"timed,omitempty"`
 	TTFT      int64 `json:"ttft_ms,omitempty"`
 	DecodeMs  int64 `json:"decode_ms,omitempty"`
@@ -679,8 +679,8 @@ func (t Totals) MeanTTFT() int64 {
 	return t.TTFT / int64(t.Timed)
 }
 
-// Speed is how fast the timed calls wrote, in tokens a second after their
-// first: 0 for none.
+// Speed is the counted tokens over the timed calls' whole duration,
+// including queueing, retries and the first-token wait: 0 for none.
 func (t Totals) Speed() float64 {
 	if t.DecodeMs <= 0 {
 		return 0

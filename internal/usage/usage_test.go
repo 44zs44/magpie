@@ -136,14 +136,14 @@ func TestSummarizeTimesFirstTokens(t *testing.T) {
 	now := time.Date(2026, 9, 23, 15, 30, 0, 0, time.UTC)
 	at := now.Add(-time.Hour)
 	recs := []Record{
-		{Time: at, Provider: "p", Model: "m", Output: 100, Millis: 3000, TTFT: 1000, FirstText: 2000, Status: 200},
+		{Time: at, Provider: "p", Model: "m", Output: 100, Millis: 3000, TTFT: 1000, FirstText: 2000, Queued: 200, Retried: 300, Status: 200},
 		{Time: at, Provider: "p", Model: "m", Output: 50, Millis: 1500, TTFT: 500, Status: 200},
 		{Time: at, Provider: "p", Model: "m", Output: 999, Millis: 800, Status: 200}, // not streamed
 		{Time: at, Provider: "p", Model: "m", Millis: 100, TTFT: 90, Status: 502},    // failed
 	}
 	s := summarize(Today, now, recs)
 	m := s.Models[0]
-	if m.Timed != 2 || m.MeanTTFT() != 750 || m.DecodeMs != 3000 || m.DecodeOut != 150 || m.Speed() != 50 {
+	if m.Timed != 2 || m.MeanTTFT() != 750 || m.DecodeMs != 4500 || m.DecodeOut != 150 || m.Speed() != 150.0/4.5 {
 		t.Fatalf("model: %+v", m.Totals)
 	}
 	if s.Timed != 2 || s.Series[14].Timed != 2 {
@@ -172,14 +172,14 @@ func TestBurstTellsNoSpeed(t *testing.T) {
 		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Output: 400, Millis: 6000, TTFT: 2000, Status: 200},   // 100 tok/s
 	}
 	m := summarize(Today, now, recs).Models[0]
-	if m.Timed != 3 || m.MeanTTFT() != (24359+3000+2000)/3 || m.DecodeMs != 16000 || m.DecodeOut != 1600 || m.Speed() != 100 {
+	if m.Timed != 3 || m.MeanTTFT() != (24359+3000+2000)/3 || m.DecodeMs != 21000 || m.DecodeOut != 1600 || m.Speed() != 1600.0/21 {
 		t.Fatalf("model: %+v, %v tok/s", m.Totals, m.Speed())
 	}
 	var rows Totals
 	for _, r := range recs {
 		rows.addRow(Row{Record: r})
 	}
-	if rows.Timed != 3 || rows.DecodeMs != 16000 || rows.DecodeOut != 1600 || rows.Speed() != 100 {
+	if rows.Timed != 3 || rows.DecodeMs != 21000 || rows.DecodeOut != 1600 || rows.Speed() != 1600.0/21 {
 		t.Fatalf("rows: %+v", rows)
 	}
 	for _, c := range []struct {
@@ -226,9 +226,9 @@ func TestReasoningReplyTimedByItsAnswer(t *testing.T) {
 		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 500, Millis: 7000, TTFT: 2000, Status: 200},     // no reasoning: 500 in 5 s
 		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 900, Reasoning: 300, Millis: 7000, Status: 200}, // not streamed
 	}
-	const ms, out = 1500 + 1500 + 3000 + 5000, 200 + 200 + 300 + 500
+	const ms, out = 15500 + 15500 + 9000 + 7000, 200 + 200 + 300 + 500
 	m := summarize(Today, now, recs).Models[0]
-	if m.Timed != 6 || m.DecodeMs != ms || m.DecodeOut != out || m.Speed() != 109.0909090909091 {
+	if m.Timed != 6 || m.DecodeMs != ms || m.DecodeOut != out || m.Speed() != 1200.0/47 {
 		t.Fatalf("model: %+v, %v tok/s", m.Totals, m.Speed())
 	}
 	var rows Totals

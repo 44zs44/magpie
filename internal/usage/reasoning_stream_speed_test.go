@@ -47,7 +47,7 @@ func TestVisibleReasoningSpeed(t *testing.T) {
 	}
 	for _, c := range []*rowChunk{&chunk, packed.unpack()} {
 		row := c.row(0)
-		if n, w := row.Decode(); row.FirstReasoning != 1000 || n != 1500 || w != 14000 {
+		if n, w := row.Decode(); row.FirstReasoning != 1000 || n != 1500 || w != 15000 {
 			t.Fatalf("cache lost streamed reasoning: %+v", row)
 		}
 	}
@@ -69,7 +69,7 @@ func TestVisibleReasoningSpeed(t *testing.T) {
 	hidden := visible
 	hidden.FirstReasoning = 0
 	sum.addRow(Row{Record: hidden})
-	if sum.DecodeOut != 1500 || sum.DecodeMs != 14000 {
+	if sum.DecodeOut != 1500 || sum.DecodeMs != 15000 {
 		t.Fatalf("hidden reasoning lifted aggregate: %+v", sum)
 	}
 }
@@ -89,8 +89,8 @@ func TestPricedRowKeepsReasoningEvidence(t *testing.T) {
 		n      int
 		w      int64
 	}{
-		{"visible reasoning", visible, false, 1500, 14000},
-		{"tool call without reasoning", toolOnly, false, 120, 8000},
+		{"visible reasoning", visible, false, 1500, 15000},
+		{"tool call without reasoning", toolOnly, false, 120, 9000},
 		{"hidden reasoning", sealed, true, 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -64,8 +64,8 @@ function serve(lang) {
 }
 
 const want = {
-  en: { first: /first token in 24 s/, late: /first token in 8\.2 s/, speed: /tok\/s/, normal: /· 100 tok\/s/, slow: /· 50 tok\/s/ },
-  zh: { first: /24 秒 后出首字/, late: /8\.2 秒 后出首字/, speed: /token\/秒/, normal: /· 100 token\/秒/, slow: /· 50 token\/秒/ },
+  en: { first: /first token in 24 s/, late: /first token in 8\.2 s/, speed: /tok\/s/, normal: /· 80 tok\/s/, slow: /· 33 tok\/s/ },
+  zh: { first: /24 秒 后出首字/, late: /8\.2 秒 后出首字/, speed: /token\/秒/, normal: /· 80 token\/秒/, slow: /· 33 token\/秒/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

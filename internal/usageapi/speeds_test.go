@@ -32,8 +32,8 @@ func TestLedgerSendsTheModelSpeedRanking(t *testing.T) {
 		t.Fatalf("speeds %+v, min %d", l.Speeds, l.SpeedMin)
 	}
 	s := l.Speeds[0]
-	// 500 tokens in the 10 s after the first token: 50 tok/s, within a bin
-	if s.Requests != 3 || s.Speed < 49 || s.Speed > 51 || s.TTFT < 1950 || s.TTFT > 2050 || s.Name == "" {
+	// 500 tokens over the whole 12 s: 41.67 tok/s, within a bin.
+	if s.Requests != 3 || s.Speed < 41 || s.Speed > 42.4 || s.TTFT < 1950 || s.TTFT > 2050 || s.Name == "" {
 		t.Fatalf("%+v", s)
 	}
 	b, _ := json.Marshal(l)

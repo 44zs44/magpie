@@ -133,7 +133,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           [await say("{n} s", { n: "41" }), await say("Duration"), false],
           ["197.5k", await say("Tokens"), false],
           [await say("{n} s", { n: "35" }), await say("First token"), false],
-          [await say("{n} tok/s", { n: 40 }), await say("Speed"), false],
+          [await say("{n} tok/s", { n: 6 }), await say("Speed"), false],
           ["98%", await say("Cache"), false],
         ]);
         assert.deepEqual(a.cut, [], `${lang} at ${width}: cut ${a.cut.join(", ")} in ${a.w}px`);

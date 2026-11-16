@@ -345,10 +345,10 @@ func TestLedgerSeriesSpeed(t *testing.T) {
 	_, pts := LedgerSeries(Today, rows)
 	h := pts[0]
 	fast, slow := h.By["model"]["fast"], h.By["model"]["slow"]
-	if fast.Timed != 2 || fast.TTFT != 1000 || fast.DecodeMs != 3000 || fast.DecodeOut != 1300 {
+	if fast.Timed != 2 || fast.TTFT != 1000 || fast.DecodeMs != 4000 || fast.DecodeOut != 1300 {
 		t.Fatalf("fast: %+v", fast)
 	}
-	if slow.Calls != 3 || slow.Timed != 2 || slow.TTFT != 2000 || slow.DecodeMs != 5000 || slow.DecodeOut != 100 {
+	if slow.Calls != 3 || slow.Timed != 2 || slow.TTFT != 2000 || slow.DecodeMs != 6000 || slow.DecodeOut != 100 {
 		t.Fatalf("slow: %+v", slow)
 	}
 	if h.DecodeMs != fast.DecodeMs+slow.DecodeMs || h.DecodeOut != fast.DecodeOut+slow.DecodeOut || h.Timed != 4 {

@@ -114,13 +114,24 @@ HTTP reply, then a successful read after setup and an unrelated card error.
 
 ### Streamed output speed
 
-Usage rows and aggregates use `Record.Decode` and `DecodeOf` in
-[`internal/usage/usage.go`](../../internal/usage/usage.go). Routing uses
+Usage rows and aggregates use `Row.Decode` in
+[`internal/usage/ledger.go`](../../internal/usage/ledger.go), whose sample
+checks use `Record.Decode` and `DecodeOf` in
+[`internal/usage/usage.go`](../../internal/usage/usage.go). The Routing page uses
 `decodeOf` in [`plugins/routing/client.js`](../../internal/gui/assets/plugins/routing/client.js); Usage
 rows use `ledDecode` in [`plugins/usage/page.js`](../../internal/gui/assets/plugins/usage/page.js).
 
-When an answer follows reasoning, only answer tokens are timed from the
-first answer text. Without answer text, all output tokens are timed only
+Displayed speed divides the same counted tokens by the request's whole
+`Millis`/`ms`, including queueing, retries and the wait for the first token.
+The existing stream checks still decide which samples count, before the
+denominator is replaced. Answer-only lower bounds also use the whole time.
+Aggregates sum those durations, and the model ranking takes the median of
+those rates. `settledCountVersion` invalidates previously saved aggregates.
+The gateway's Speed first strategy still uses `DecodeOf`'s stream rate and
+TTFT separately; changing the display does not change automatic routing.
+
+For sample validation, an answer following reasoning is timed from its
+first answer text. Without answer text, all output tokens qualify only
 when the gateway records paced visible reasoning and a usable content flow.
 `firstToken.reasoningMs` in
 [`ttft.go`](../../internal/gateway/ttft.go) requires reasoning at the first

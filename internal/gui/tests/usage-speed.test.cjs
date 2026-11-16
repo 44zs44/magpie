@@ -42,8 +42,8 @@ Object.assign(ROWS[5], kimi, { first_text_ms: 5400 });
 Object.assign(ROWS[6], kimi, { first_text_ms: 15764 });
 Object.assign(ROWS[7], kimi, { out: 552, first_text_ms: 5400, flow_ms: 10600 });
 
-const FAST = { id: "glm-fast", calls: 28, input: 1, output: 3780, cache_read: 0, cache_write: 0, cost: 0.3, timed: 27, ttft_ms: 27 * 600, decode_ms: 27 * 1800, decode_out: 27 * 135 };
-const SLOW = { id: "kimi-slow", calls: 1, input: 1, output: 20, cache_read: 0, cache_write: 0, cost: 0.01, timed: 1, ttft_ms: 600, decode_ms: 2000, decode_out: 20 };
+const FAST = { id: "glm-fast", calls: 28, input: 1, output: 3780, cache_read: 0, cache_write: 0, cost: 0.3, timed: 27, ttft_ms: 27 * 600, decode_ms: 27 * 2400, decode_out: 27 * 135 };
+const SLOW = { id: "kimi-slow", calls: 1, input: 1, output: 20, cache_read: 0, cache_write: 0, cost: 0.01, timed: 1, ttft_ms: 600, decode_ms: 2600, decode_out: 20 };
 const part = (x) => ({ calls: x.calls, tokens: x.output, cost: x.cost, timed: x.timed, ttft_ms: x.ttft_ms, decode_ms: x.decode_ms, decode_out: x.decode_out });
 const sum = (k) => FAST[k] + SLOW[k];
 
@@ -55,12 +55,12 @@ function ledger(period) {
     timed: sum("timed"), ttft_ms: sum("ttft_ms"), decode_ms: sum("decode_ms"), decode_out: sum("decode_out"),
     by: { model: [FAST, SLOW] }, bucket: "hour",
     series: [
-      { label: "", time: hour(1), calls: 14, input: 1, output: 1890, ...{ timed: 14, ttft_ms: 8400, decode_ms: 25200, decode_out: 1890 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 14, ttft_ms: 8400, decode_ms: 25200, decode_out: 1890 }) } } },
+      { label: "", time: hour(1), calls: 14, input: 1, output: 1890, ...{ timed: 14, ttft_ms: 8400, decode_ms: 33600, decode_out: 1890 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 14, ttft_ms: 8400, decode_ms: 33600, decode_out: 1890 }) } } },
       // hour(0): the hour's own is 1910 tokens in 27.4 s (69.7 tok/s) while
       // glm-fast answered 1755 in 23.4 s (75.0), so its mark leaves the column
       // and gets a leader line; kimi-slow (10) stays under it. hour(1) is the
       // hour's own equal to the one model that answered in it, so no line
-      { label: "", time: hour(0), calls: 15, input: 1, output: 1910, ...{ timed: 14, ttft_ms: 8400, decode_ms: 27400, decode_out: 1910 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 13, ttft_ms: 7800, decode_ms: 23400, decode_out: 1755 }), "kimi-slow": part(SLOW) } } },
+      { label: "", time: hour(0), calls: 15, input: 1, output: 1910, ...{ timed: 14, ttft_ms: 8400, decode_ms: 35800, decode_out: 1910 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 13, ttft_ms: 7800, decode_ms: 31200, decode_out: 1755 }), "kimi-slow": part(SLOW) } } },
     ],
     agents: [{ id: "claude", name: "Claude Code", icon: "claudecode-color" }],
   };
@@ -96,8 +96,8 @@ function server(lang) {
 }
 
 const L = {
-  en: { speed: "Speed", kpi: "Output speed", fast: "75 tok/s", slow: "10 tok/s", all: "72 tok/s", first: "first token in 600 ms on average · 28 timed replies", sent: "Sent", hint: "Sent, Effort and the cache are in each row's details" },
-  zh: { speed: "速度", kpi: "输出速度", fast: "75 token/秒", slow: "10 token/秒", all: "72 token/秒", first: "首字平均 600 毫秒 · 28 次计时", sent: "发送模型", hint: "窗口较窄：发送模型、推理强度和缓存在每行的详情里" },
+  en: { speed: "Speed", kpi: "Output speed", fast: "56 tok/s", slow: "8 tok/s", all: "54 tok/s", first: "first token in 600 ms on average · 28 timed replies", sent: "Sent", hint: "Sent, Effort and the cache are in each row's details" },
+  zh: { speed: "速度", kpi: "输出速度", fast: "56 token/秒", slow: "8 token/秒", all: "54 token/秒", first: "首字平均 600 毫秒 · 28 次计时", sent: "发送模型", hint: "窗口较窄：发送模型、推理强度和缓存在每行的详情里" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -134,7 +134,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal((await cell(4).textContent()).trim(), "—");
         assert.equal((await cell(5).textContent()).trim(), "—");
         assert.equal((await cell(6).textContent()).trim(), "—");
-        assert.equal((await cell(7).textContent()).trim(), lang === "en" ? "50 tok/s" : "50 token/秒");
+        assert.equal((await cell(7).textContent()).trim(), lang === "en" ? "33 tok/s" : "33 token/秒");
 
         // the table fits the window; what it leaves out is in the details,
         // the first token's column (#2522) under each duration at this width

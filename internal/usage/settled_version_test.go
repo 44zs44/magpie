@@ -18,7 +18,7 @@ import (
 // settled days, under settledCountVersion. A change that counts them
 // otherwise changes it: raise settledCountVersion and set this to the new
 // hash in the same commit.
-const settledCounted = "e27e12fd0fb0b8589936f2a562ae602f0cc2f1368d2e7a8f4668cdff6afe5952"
+const settledCounted = "a981aa6c6e0d2f005fdbf12d57a081951515e61a394189e4336ebc65d80e0ea7"
 
 // The settled days, a page's cells and Codex's effort are kept on disk
 // under settledCountVersion, not under this package's source: an upgrade
@@ -40,7 +40,7 @@ func TestSettledCountedAsVersioned(t *testing.T) {
 		writeCodexCall(t, path, id, "s"+id, `"vscode"`, "resp-"+id, "m", effort, at, 100+i, 10+i)
 		Append(Record{Time: at.Add(time.Minute), Agent: "codex", Provider: "openai", Model: "m", Input: 100 + i, Output: 10 + i, CacheRead: 7 * i, Status: 200, ResponseID: "resp-" + id, Session: "s" + id})
 	}
-	Append(Record{Time: now.AddDate(0, 0, -30), Agent: "claude", Provider: "openai", Model: "m", Input: 40, Output: 20, CacheRead: 300, CacheWrite: 50, Status: 200, UpBytes: 2400, DownBytes: 800, ImageFilesSaved: 300})
+	Append(Record{Time: now.AddDate(0, 0, -30), Agent: "claude", Provider: "openai", Model: "m", Input: 40, Output: 20, CacheRead: 300, CacheWrite: 50, Status: 200, Millis: 2000, TTFT: 1000, UpBytes: 2400, DownBytes: 800, ImageFilesSaved: 300})
 	Append(Record{Time: now.AddDate(0, 0, -25), Agent: "claude", Provider: "openai", Model: "m", Input: 9, Status: 500})
 	codexEffort.Lock()
 	codexEffort.periods = map[Period]*effortEntry{}

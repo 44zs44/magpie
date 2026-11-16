@@ -61,7 +61,7 @@ function ledger(period) {
   return {
     period, rows: ROWS, offset: 0, total: ROWS.length, calls: ROWS.length, errors: 1,
     input: 1, output: 1, cache_read: 0, cache_write: 0, cost: 0.02, unpriced: 0,
-    timed: 1, ttft_ms: 2000, decode_ms: 5000, decode_out: 500, decode_n: 1,
+    timed: 1, ttft_ms: 2000, decode_ms: 7000, decode_out: 500, decode_n: 1,
     by: { model: [] }, bucket: "hour", series: [],
     agents: [{ id: "codex", name: "Codex", icon: "codex-color" }],
   };
@@ -95,10 +95,10 @@ function server(lang) {
 
 const L = {
   en: {
-    whole: "≥124 tok/s", answer: "≥100 tok/s", measured: "100 tok/s",
+    whole: "≥124 tok/s", answer: "≥63 tok/s", measured: "71 tok/s",
     wholeTip: "At least: 3,832 output tokens in 31 s, from the request to its last token, the wait for the first one counted too",
     notStreamed: "Not streamed: no first token to time a speed from",
-    answerTip: "At least: 1,000 answer tokens in 10 s after the first token, the 300 reasoning tokens left out. No first text was recorded",
+    answerTip: "At least: 1,000 answer tokens in 16 s over the whole request, the 300 reasoning tokens left out. No first text was recorded",
     little: "Too little came after the first token to time a speed by: 6 tokens in 87 ms",
     burst: "It came in one burst at its end, not as it was written, so how fast it was written isn't seen",
     failed: "A failed request tells no speed",
@@ -106,10 +106,10 @@ const L = {
     allReasoning: "All its output was reasoning: no answer after it to time a speed from",
   },
   zh: {
-    whole: "≥124 token/秒", answer: "≥100 token/秒", measured: "100 token/秒",
+    whole: "≥124 token/秒", answer: "≥63 token/秒", measured: "71 token/秒",
     wholeTip: "下限：从收到请求到最后一个 token，31 秒 输出 3,832 个 token，等首字的时间也算在里面",
     notStreamed: "非流式：没有首字时间，算不出速度",
-    answerTip: "下限：首字后 10 秒 输出 1,000 个正文 token，300 个推理 token 不计。没有记录首个正文的时间",
+    answerTip: "下限：请求总耗时 16 秒 输出 1,000 个正文 token，300 个推理 token 不计。没有记录首个正文的时间",
     little: "首字后内容太少，测不出速度：87 毫秒 输出 6 个 token",
     burst: "内容在最后一次性到达，不是边写边发，看不出写得多快",
     failed: "失败的请求没有速度",

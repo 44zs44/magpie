@@ -18856,7 +18856,7 @@ const hitPct = (h, d = 0) => {
 const cacheLeftOut = (x) => x.cache_unknown_calls
   ? t(x.cache_unknown_calls === 1 ? "{n} request left out: its vendor doesn't count the cache" : "{n} requests left out: their vendor doesn't count the cache", { n: ledNum(x.cache_unknown_calls) })
   : "";
-// timed replies' tokens a second after their first (usage.Totals.Speed)
+// timed replies' tokens a second over their whole time (usage.Totals.Speed)
 const ledSpeed = (x) => x?.decode_ms > 0 ? (1000 * x.decode_out) / x.decode_ms : 0;
 // the least untimed replies wrote at (usage.Totals.Floor)
 const ledFloor = (x) => x?.floor_ms > 0 ? (1000 * x.floor_out) / x.floor_ms : 0;
@@ -18868,8 +18868,8 @@ function ledGroupSpeed(x) {
   if (!v && !f) return null;
   const tok = (s) => t("{n} tok/s", { n: ledNum(Math.round(s)) });
   const count = (k, timed) => !k ? "" : t(timed ? (k === 1 ? "{k} timed reply" : "{k} timed replies") : (k === 1 ? "{k} reply" : "{k} replies"), { k: ledNum(k) });
-  const vTitle = !v || !kv ? "" : f ? t(kv === 1 ? "Measured on {k} reply, from its first token to its end" : "Measured on {k} replies, from their first token to their end", { k: ledNum(kv) })
-    : t(kv === 1 ? "Measured on {k} reply, from its first token to its end; the others tell no speed" : "Measured on {k} replies, from their first token to their end; the others tell no speed", { k: ledNum(kv) });
+  const vTitle = !v || !kv ? "" : f ? t(kv === 1 ? "Measured on {k} reply over its whole time" : "Measured on {k} replies over their whole time", { k: ledNum(kv) })
+    : t(kv === 1 ? "Measured on {k} reply over its whole time; the others tell no speed" : "Measured on {k} replies over their whole time; the others tell no speed", { k: ledNum(kv) });
   const fTitle = !f || !kf ? "" : t(kf === 1 ? "At least: {k} reply read from a session file, which doesn't say when its answer began, so time before that is counted too" : "At least: {k} replies read from session files, which don't say when their answers began, so time before that is counted too", { k: ledNum(kf) });
   // speed and count kept apart for a narrow card (#1623)
   const measured = v ? { s: v, head: tok(v), count: count(kv, true), title: vTitle } : null;

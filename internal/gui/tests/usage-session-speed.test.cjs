@@ -62,7 +62,7 @@ function ledger(period) {
     period, rows: ROWS, offset: 0, total: ROWS.length, calls: ROWS.length, errors: 1,
     input: 1, output: 12355, cache_read: 0, cache_write: 0, cost: 0.02, unpriced: 5,
     // only what magpie timed: 135 tokens in 1.8 s and 1200 in 8 s
-    timed: 2, ttft_ms: 2600, decode_ms: 9800, decode_out: 1335,
+    timed: 2, ttft_ms: 2600, decode_ms: 12400, decode_out: 1335,
     by: { model: [] }, bucket: "hour", series: [],
     agents: [{ id: "claude", name: "Claude Code", icon: "claudecode-color" }, { id: "codex", name: "Codex", icon: "codex-color" }, { id: "claude-desktop", name: "Claude Desktop", icon: "claude-color" }],
   };
@@ -99,12 +99,12 @@ function server(lang) {
 
 const L = {
   en: {
-    speed: "Speed", gatewayFloor: "≥500 tok/s", floor: "≥98 tok/s", desktop: "≥125 tok/s", codexFloor: "≥25 tok/s", timed: "75 tok/s", codex: "150 tok/s",
+    speed: "Speed", gatewayFloor: "≥500 tok/s", floor: "≥98 tok/s", desktop: "≥125 tok/s", codexFloor: "≥25 tok/s", timed: "56 tok/s", codex: "120 tok/s",
     floorTip: "At least: 2,558 output tokens in 26 s, from the line that asked for it to its last. The session file has no first token, so the wait for it is counted too",
     noFirst: "The session file has no first token to time a speed from", notStreamed: "Not streamed: no first token to time a speed from",
   },
   zh: {
-    speed: "速度", gatewayFloor: "≥500 token/秒", floor: "≥98 token/秒", desktop: "≥125 token/秒", codexFloor: "≥25 token/秒", timed: "75 token/秒", codex: "150 token/秒",
+    speed: "速度", gatewayFloor: "≥500 token/秒", floor: "≥98 token/秒", desktop: "≥125 token/秒", codexFloor: "≥25 token/秒", timed: "56 token/秒", codex: "120 token/秒",
     floorTip: "下限：从发出请求的那一行到最后一行，26 秒 输出 2,558 个 token。会话文件没有首字时间，等首字的时间也算在里面",
     noFirst: "会话文件没有首字时间，算不出速度", notStreamed: "非流式：没有首字时间，算不出速度",
   },

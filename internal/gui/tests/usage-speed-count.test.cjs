@@ -64,7 +64,7 @@ const ROWS = [
 ];
 // the groups as usage.Breakdown sums them (TestGroupSpeedSaysHowManyRepliesItIsOf)
 const G = {
-  sol: { id: "gpt-6.1-sol", calls: 260, input: 2340000, output: 389000, cache_read: 0, cache_write: 0, cost: 0, timed: 1, ttft_ms: 1000, decode_ms: 4000, decode_out: 500, decode_n: 1, floor_out: 388500, floor_ms: 7770000, floor_n: 259 },
+  sol: { id: "gpt-6.1-sol", calls: 260, input: 2340000, output: 389000, cache_read: 0, cache_write: 0, cost: 0, timed: 1, ttft_ms: 1000, decode_ms: 5000, decode_out: 500, decode_n: 1, floor_out: 388500, floor_ms: 7770000, floor_n: 259 },
   // measured only: 992 tokens over 16 s of two replies, 62 tok/s
   astra: { id: "gpt-6-astra", calls: 9, input: 100000, output: 5000, cache_read: 0, cache_write: 0, cost: 0, timed: 2, ttft_ms: 3000, decode_ms: 16000, decode_out: 992, decode_n: 2 },
   cc: { id: "claude-opus-5-5", calls: 42, input: 210000, output: 64000, cache_read: 0, cache_write: 0, cost: 0, floor_out: 60000, floor_ms: 600000, floor_n: 30 },
@@ -122,29 +122,29 @@ function server(lang) {
 const L = {
   en: { speed: "Speed", kpi: "Output speed",
     m: (n, k) => `${n} tok/s · ${k} timed ${k === 1 ? "reply" : "replies"}`, f: (n, k) => `≥${n} tok/s · ${k} replies`, join: "; ", timed: (k) => ` · ${k} timed replies`,
-    measured: (k, others) => (k === 1 ? `Measured on ${k} reply, from its first token to its end` : `Measured on ${k} replies, from their first token to their end`) + (others ? "; the others tell no speed" : ""),
-    floorTip: (k) => `At least: ${k} replies read from session files, which don't say when their answers began, so time before that is counted too`, row: "125 tok/s", rowFloor: "≥100 tok/s",
-    cx: "≥50 tok/s", answer: "≥100 tok/s", push: "≥120 tok/s", n1200: "1,200", turnTip: "the whole turn. What came after the first token (", answerTip: "At least: 1,000 answer tokens in " },
+    measured: (k, others) => (k === 1 ? `Measured on ${k} reply over its whole time` : `Measured on ${k} replies over their whole time`) + (others ? "; the others tell no speed" : ""),
+    floorTip: (k) => `At least: ${k} replies read from session files, which don't say when their answers began, so time before that is counted too`, row: "100 tok/s", rowFloor: "≥100 tok/s",
+    cx: "≥50 tok/s", answer: "≥83 tok/s", push: "≥120 tok/s", n1200: "1,200", turnTip: "the whole turn. What came after the first token (", answerTip: "At least: 1,000 answer tokens in " },
   zh: { speed: "速度", kpi: "输出速度",
     m: (n, k) => `${n} token/秒 · ${k} 次计时`, f: (n, k) => `≥${n} token/秒 · ${k} 次回复`, join: "；", timed: (k) => ` · ${k} 次计时`,
-    measured: (k, others) => `实测 ${k} 次回复：从首字到结束` + (others ? "；其余请求测不出速度" : ""),
-    floorTip: (k) => `下限：${k} 次读自会话文件的回复。会话文件不记录正文何时开始，之前的时间也算在里面`, row: "125 token/秒", rowFloor: "≥100 token/秒",
-    cx: "≥50 token/秒", answer: "≥100 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字后只有 ", answerTip: "输出 1,000 个正文 token，200 个推理 token 不计" },
+    measured: (k, others) => `实测 ${k} 次回复：按请求总耗时计算` + (others ? "；其余请求测不出速度" : ""),
+    floorTip: (k) => `下限：${k} 次读自会话文件的回复。会话文件不记录正文何时开始，之前的时间也算在里面`, row: "100 token/秒", rowFloor: "≥100 token/秒",
+    cx: "≥50 token/秒", answer: "≥83 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字后只有 ", answerTip: "输出 1,000 个正文 token，200 个推理 token 不计" },
   "zh-TW": { speed: "速度", kpi: null,
     m: (n, k) => `${n} token/秒 · ${k} 次計時`, f: (n, k) => `≥${n} token/秒 · ${k} 次回覆`, join: "；", timed: (k) => ` · ${k} 次計時`,
-    measured: (k, others) => `實測 ${k} 次回覆：從首字到結束` + (others ? "；其餘請求測不出速度" : ""),
-    floorTip: (k) => `下限：${k} 次讀自會話檔案的回覆。會話檔案不記錄正文何時開始，之前的時間也算在裡面`, row: "125 token/秒", rowFloor: "≥100 token/秒",
-    cx: "≥50 token/秒", answer: "≥100 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字後只有 ", answerTip: "輸出 1,000 個正文 token，200 個推理 token 不計" },
+    measured: (k, others) => `實測 ${k} 次回覆：按請求總耗時計算` + (others ? "；其餘請求測不出速度" : ""),
+    floorTip: (k) => `下限：${k} 次讀自會話檔案的回覆。會話檔案不記錄正文何時開始，之前的時間也算在裡面`, row: "100 token/秒", rowFloor: "≥100 token/秒",
+    cx: "≥50 token/秒", answer: "≥83 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字後只有 ", answerTip: "輸出 1,000 個正文 token，200 個推理 token 不計" },
   ja: { speed: null, kpi: null,
     m: (n, k) => `${n} トークン/秒 · 計測 ${k} 件`, f: (n, k) => `≥${n} トークン/秒 · 応答 ${k} 件`, join: "／", timed: (k) => ` · 計測 ${k} 件`,
-    measured: (k, others) => `${k} 件の応答で実測：最初のトークンから終わりまで` + (others ? "。ほかのリクエストは速度を計れません" : ""),
-    floorTip: (k) => `下限：セッションファイルから読んだ ${k} 件の応答。回答が始まった時刻がないため、その前の時間も含まれます`, row: "125 トークン/秒", rowFloor: "≥100 トークン/秒",
-    cx: "≥50 トークン/秒", answer: "≥100 トークン/秒", push: "≥120 トークン/秒", n1200: "1,200", turnTip: "最初のトークン後は ", answerTip: "で回答 1,000 トークン（推論 200 トークンは含めず）" },
+    measured: (k, others) => `${k} 件の応答で実測：リクエスト全体の時間` + (others ? "。ほかのリクエストは速度を計れません" : ""),
+    floorTip: (k) => `下限：セッションファイルから読んだ ${k} 件の応答。回答が始まった時刻がないため、その前の時間も含まれます`, row: "100 トークン/秒", rowFloor: "≥100 トークン/秒",
+    cx: "≥50 トークン/秒", answer: "≥83 トークン/秒", push: "≥120 トークン/秒", n1200: "1,200", turnTip: "最初のトークン後は ", answerTip: "で回答 1,000 トークン（推論 200 トークンは除外）" },
   de: { speed: null, kpi: null,
     m: (n, k) => `${n} Token/s · ${k} gemessene ${k === 1 ? "Antwort" : "Antworten"}`, f: (n, k) => `≥${n} Token/s · ${k} Antworten`, join: "; ", timed: (k) => ` · ${k} gemessene Antworten`,
-    measured: (k, others) => `Gemessen an ${k} ${k === 1 ? "Antwort" : "Antworten"}, vom ersten Token bis zum Ende` + (others ? "; die übrigen Anfragen zeigen kein Tempo" : ""),
-    floorTip: (k) => `Mindestens: ${k} Antworten aus Sitzungsdateien. Sie sagen nicht, wann die Antworten begannen, also zählt die Zeit davor mit`, row: "125 Token/s", rowFloor: "≥100 Token/s",
-    cx: "≥50 Token/s", answer: "≥100 Token/s", push: "≥120 Token/s", n1200: "1.200", turnTip: "der ganze Turn. Nach dem ersten Token kam nur ", answerTip: "Mindestens: 1.000 Antwort-Token in " },
+    measured: (k, others) => `Gemessen an ${k} ${k === 1 ? "Antwort" : "Antworten"} über die gesamte Anfrage` + (others ? "; die übrigen Anfragen zeigen kein Tempo" : ""),
+    floorTip: (k) => `Mindestens: ${k} Antworten aus Sitzungsdateien. Sie sagen nicht, wann die Antworten begannen, also zählt die Zeit davor mit`, row: "100 Token/s", rowFloor: "≥100 Token/s",
+    cx: "≥50 Token/s", answer: "≥83 Token/s", push: "≥120 Token/s", n1200: "1.200", turnTip: "der ganze Turn. Nach dem ersten Token kam nur ", answerTip: "Mindestens: 1.000 Antwort-Token in " },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -161,7 +161,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // astra: two measured at 62; Claude Code: 30 floors at 100; the
         // period: three measured at 75 (1,492 tokens over 20 s), 289 floors
         // at 54
-        const sol = w.f(50, 259) + w.join + w.m(125, 1), solTip = w.floorTip(259) + "\n" + w.measured(1, false);
+        const sol = w.f(50, 259) + w.join + w.m(100, 1), solTip = w.floorTip(259) + "\n" + w.measured(1, false);
         const astra = w.m(62, 2), astraTip = w.measured(2, true);
         const cc = w.f(100, 30), ccTip = w.floorTip(30);
         await t.test(lang + " " + width, async () => {
@@ -223,7 +223,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.deepEqual(await kpi.locator(".v > span").allTextContents(), w.f(54, 289).split(" · "), "the speed, then its count");
           const subs = kpi.locator(".sub");
           assert.equal(await subs.count(), 2);
-          assert.equal((await subs.nth(0).textContent()).trim(), w.m(75, 3));
+          assert.equal((await subs.nth(0).textContent()).trim(), w.m(71, 3));
           assert((await subs.nth(1).textContent()).endsWith(w.timed(3)), "the first token's line says its count: " + (await subs.nth(1).textContent()));
           assert(!(await subs.nth(1).textContent()).includes("/"), "no speed on the first token's line");
           assert(await subs.nth(1).evaluate((e) => e.scrollWidth <= e.clientWidth + 1), "the first token's count is read whole");

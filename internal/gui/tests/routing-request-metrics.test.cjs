@@ -83,7 +83,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const check = async () => {
         assert.equal(await rows.nth(0).locator(".cache-hit .v").textContent(), "60%");
         assert.match(await rows.nth(0).locator(".cache-hit").getAttribute("title"), lang === "zh" ? /缓存命中率.*提示词/ : /Cache hit rate.*prompt/);
-        assert.match(await rows.nth(0).locator(".speed .v").textContent(), lang === "zh" ? /^100 token\/秒$/ : /^100 tok\/s$/);
+        assert.match(await rows.nth(0).locator(".speed .v").textContent(), lang === "zh" ? /^36 token\/秒$/ : /^36 tok\/s$/);
         assert.match(await rows.nth(1).locator(".cache-hit .v").textContent(), /0%$/);
         assert.match(await rows.nth(2).locator(".cache-hit .v").textContent(), /100%$/);
         assert.equal(await rows.nth(1).locator(".cost").textContent(), "≈$0.000", "known zero cost remains visible");
@@ -96,7 +96,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(await rows.nth(6).locator(".speed .v").textContent(), /^≥339 /);
         assert.match(await rows.nth(7).locator(".speed .v").textContent(), /^≥5,?509 /);
         assert.match(await rows.nth(8).locator(".cache-hit").textContent(), /60%$/, "sum the billable prompt tiers across retries");
-        assert.match(await rows.nth(8).locator(".speed .v").textContent(), /^100 /, "retry wait and earlier output do not change decode speed");
+        assert.match(await rows.nth(8).locator(".speed .v").textContent(), /^19 /, "retry wait counts once; earlier output stays excluded");
         assert.equal(await rows.nth(9).locator(".cache-hit").count(), 0, "a request still underway has no final rate");
         assert.equal(await rows.nth(13).locator(".cache-hit").count(), 0, "a vendor that counts no cache tokens has no hit rate, not 0%");
         assert.equal(await rows.nth(12).locator(".meta").isVisible(), false, "a row with no available metrics has no empty band");
@@ -125,12 +125,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await page.locator("button.rt-session").filter({ hasText: "kiro-metrics" }).locator(".cache-hit").count(), 0, "a session of uncounted cache has no hit rate");
       assert.doesNotMatch(await unknown.locator(".summary").textContent(), /token|—/, "a session without token counts has no fake zero or dash");
       assert.equal(await group.locator(".cache-hit .v").textContent(), "63%", "cache average is weighted by prompt tokens, not by request count");
-      assert.match(await group.locator(".speed .v").textContent(), /^133 /, "speed is output divided by summed decode windows, not the mean of individual speeds");
+      assert.match(await group.locator(".speed .v").textContent(), /^49 /, "speed is output divided by summed whole request times, not the mean of individual speeds");
       // the same six replies over their whole time, the wait for the first
       // token in, as tools that time the whole request read it (@verymoes
       // on X): 4,000 tokens over 82 s
       const speedTip = await group.locator(".speed").getAttribute("title");
-      assert.match(speedTip, lang === "zh" ? /不计等待首个 token 的时间/ : /the wait for the first token, and replies without usable timing, are left out/, "the tooltip says the wait for the first token is left out");
+      assert.match(speedTip, lang === "zh" ? /请求总耗时之和/ : /sum of whole request times/, "the tooltip includes the wait for the first token");
       assert.match(speedTip, lang === "zh" ? /全程时间.*：49 token\/秒/ : /whole time.*: 49 tok\/s/, "the tooltip gives the speed over the whole time too");
       assert.match(await group.locator(".cache-hit").getAttribute("title"), /9.*11|11.*9/, "unknown and unfinished requests are excluded and coverage is disclosed");
       assert.match(await group.locator(".rt-token-total").getAttribute("title"), /11.*12|12.*11/, "session token breakdown discloses missing records");
