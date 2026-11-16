@@ -256,6 +256,7 @@ func codexIn(at place) *Agent {
 	dir := at.codexHome()
 	path := filepath.Join(dir, "config.toml")
 	catalogPath := filepath.Join(dir, "magpie-models.json")
+	deskPath := filepath.Join(dir, "magpie-desktop-models.json")
 	get := func(k string) string { v, _ := edit.GetTOMLTop(path, k); return v }
 	// this machine's Codex reaches the gateway at the address its config
 	// gives, when that is magpie's on another host: the Codex app on
@@ -291,10 +292,9 @@ func codexIn(at place) *Agent {
 		}
 		return filepath.Clean(c) == filepath.Clean(catalogPath)
 	}
-	// ownList is magpie's model list for Codex as written to catalogPath:
-	// what the user added by hand to the list there (a key magpie doesn't
-	// write, supports_reasoning_summaries on a model magpie gave none) is
-	// kept, not written over by the next model switch or sync (#1450).
+	// ownList merges provider model changes into the local catalog Codex
+	// already reads, keeping its other customizations through a switch or
+	// sync. With no local catalog, magpie writes catalogPath.
 	// Each model's default effort is the one this config starts new
 	// sessions at, or the model's nearest (codexcat.ModelDefault), which
 	// Codex takes on a switch to it. The models Codex used are among the
@@ -303,7 +303,15 @@ func codexIn(at place) *Agent {
 		return codexcat.CatalogUsed(magpieModels("codex"), get("model_reasoning_effort"), usage.CodexUsed())
 	}
 	ownList := func() error {
-		return writeCodexCatalog(catalogPath, func() ([]byte, error) { return list(), nil }, true)
+		file := catalogPath
+		if ref := get("model_catalog_json"); ref != "" {
+			var err error
+			file, err = codexCatalogFile(at, dir, ref)
+			if err != nil {
+				return err
+			}
+		}
+		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true)
 	}
 	// listGone: magpie's list is known not to be there; one that can't be
 	// looked at is not taken for gone
@@ -334,8 +342,8 @@ func codexIn(at place) *Agent {
 		return errors.Is(err, fs.ErrNotExist)
 	}
 	// dropList takes the list away as magpie steps out as Codex's
-	// provider; one holding what the user added stays, which the config
-	// no longer names, for ownList to keep when magpie is back
+	// provider; one holding what the user added stays at the same config
+	// reference, for ownList to keep when magpie is back.
 	//
 	// The config never names it once it is gone: Codex reads the file as
 	// it loads its config, and with it missing loads none at all ("No such
@@ -427,7 +435,6 @@ func codexIn(at place) *Agent {
 	// magpie's catalog as a provider (catalogPath, ownCatalog): Codex is
 	// on its built-in provider, with its own models from the ChatGPT
 	// backend's list as the backend sent them (CodexDesktopList).
-	deskPath := filepath.Join(dir, "magpie-desktop-models.json")
 	deskRef := at.native(deskPath)
 	if at.spell == nil && runtime.GOOS == "windows" {
 		deskRef = filepath.Base(deskPath)
@@ -452,6 +459,39 @@ func codexIn(at place) *Agent {
 		_, err := os.Stat(deskPath)
 		return errors.Is(err, fs.ErrNotExist)
 	}
+	localCatalog := func() bool {
+		c := get("model_catalog_json")
+		return c != "" && (ownCatalog(c) || deskCatalog(c) || !theirListGone(c))
+	}
+	// A local catalog is the base through provider changes. Only a plain
+	// generated provider list can go back to the gateway's live list.
+	keepCatalog := func() bool {
+		c := get("model_catalog_json")
+		if c == "" {
+			return false
+		}
+		if ownCatalog(c) {
+			return codexCatalogPending(catalogPath)
+		}
+		if deskCatalog(c) {
+			return codexCatalogPending(deskPath)
+		}
+		return !theirListGone(c)
+	}
+	leaveProvider := func() error {
+		keys := []string{"model_provider"}
+		keep := deskCatalog(get("model_catalog_json")) || keepCatalog()
+		if !keep {
+			keys = append(keys, "model_catalog_json")
+		}
+		if err := edit.DelTOMLTop(path, keys...); err != nil {
+			return err
+		}
+		if !keep {
+			dropList()
+		}
+		return nil
+	}
 	// deskWanted: magpie is connected beside the ChatGPT sign-in (joined,
 	// or on one of magpie's models), not as Codex's provider, on this
 	// machine's Codex, and the Codex app reads this config. The CLI alone
@@ -473,28 +513,27 @@ func codexIn(at place) *Agent {
 	// where it isn't wanted: the key, and the file. A list not known now
 	// (the backend not asked yet, or not answering) leaves the file as it
 	// was, never an empty one; a key naming a file that is gone goes, as
-	// Codex loads no config then. A model_catalog_json of the user's own
-	// stands: theirs is what Codex reads.
+	// Codex loads no config then. An existing model_catalog_json stays the
+	// target, so changing provider does not discard its local customizations.
 	deskList := func() error {
 		named := deskCatalog(get("model_catalog_json"))
+		if asProvider() {
+			return nil
+		}
 		if !deskWanted() {
 			// the list not wanted: the next one named is named anew
 			if stashShared()[at.key("codex.desk_at")] != "" {
 				stash(map[string]string{at.key("codex.desk_at"): ""})
 			}
-			if named {
+			// A CLI with a local customized list keeps reading that list.
+			if viaBase() && (joined() || beside()) && keepCatalog() {
+				return ownList()
+			}
+			if named && !keepCatalog() {
 				if err := edit.DelTOMLTop(path, "model_catalog_json"); err != nil {
 					return err
 				}
 			}
-			if !codexCatalogPending(deskPath) {
-				if err := os.Remove(deskPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return err
-				}
-			}
-			return nil
-		}
-		if c := get("model_catalog_json"); c != "" && !named {
 			if !codexCatalogPending(deskPath) {
 				if err := os.Remove(deskPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 					return err
@@ -512,8 +551,17 @@ func codexIn(at place) *Agent {
 			}
 			return nil
 		}
-		if err := writeCodexCatalog(deskPath, func() ([]byte, error) {
-			// Rebuild after importing edits so this write uses saved settings.
+		file, ref := deskPath, deskRef
+		if c := get("model_catalog_json"); c != "" {
+			var err error
+			file, err = codexCatalogFile(at, dir, c)
+			if err != nil {
+				return err
+			}
+			ref = c
+		}
+		if err := writeCodexCatalog(file, func() ([]byte, error) {
+			// Ask again at the write, keeping the previous file if it is unknown.
 			if next, known := CodexDesktopList(); known {
 				return next, nil
 			}
@@ -521,18 +569,15 @@ func codexIn(at place) *Agent {
 		}, false); err != nil {
 			return err
 		}
-		if !named {
-			if err := edit.SetTOMLTop(path, edit.KV{Path: "model_catalog_json", Value: deskRef}); err != nil {
+		if get("model_catalog_json") == "" {
+			if err := edit.SetTOMLTop(path, edit.KV{Path: "model_catalog_json", Value: ref}); err != nil {
 				return err
 			}
-			// when, for the Codex app's app-servers started before it,
-			// which list Codex's models alone till they restart (DeskAt).
-			// Taken out and named again in one change (a model picked in
-			// magpie, a reset to Codex's default) it was named all along,
-			// and keeps its time: a new one would restart the app for it
-			if stashShared()[at.key("codex.desk_at")] == "" {
-				stash(map[string]string{at.key("codex.desk_at"): strconv.FormatInt(time.Now().UnixNano(), 10)})
-			}
+		}
+		// Existing local catalogs also need the app's usual reload notice
+		// when first synchronized. Rewriting the same list keeps its time.
+		if stashShared()[at.key("codex.desk_at")] == "" {
+			stash(map[string]string{at.key("codex.desk_at"): strconv.FormatInt(time.Now().UnixNano(), 10)})
 		}
 		return nil
 	}
@@ -555,7 +600,7 @@ func codexIn(at place) *Agent {
 	// its sign-in marked stale (its tag carries the effort)
 	relist := func() error {
 		switch {
-		case asProvider() && ownCatalog(get("model_catalog_json")):
+		case asProvider() && localCatalog():
 			return ownList()
 		case viaBase():
 			if err := codexStaleCache(filepath.Join(dir, "models_cache.json"), provider.CodexListTag()); err != nil {
@@ -733,7 +778,7 @@ func codexIn(at place) *Agent {
 		}
 		// a model list of the user's own, put in by hand since, stays
 		keys := []string{"model_provider"}
-		if c := get("model_catalog_json"); c == "" || ownCatalog(c) {
+		if !keepCatalog() {
 			keys = append(keys, "model_catalog_json")
 		}
 		if err := edit.DelTOMLTop(path, keys...); err != nil {
@@ -1767,7 +1812,10 @@ func codexIn(at place) *Agent {
 			// model. A provider of the user's at the top stays (#4347):
 			// a reset takes magpie's keys out, not theirs, and Codex
 			// goes on resuming the threads it saved with theirs
-			keys := []string{"model", "model_catalog_json"}
+			keys := []string{"model"}
+			if !keepCatalog() {
+				keys = append(keys, "model_catalog_json")
+			}
 			if p := get("model_provider"); p == "" || p == "openai" || p == magpieID {
 				keys = append(keys, "model_provider")
 			}
@@ -1816,16 +1864,13 @@ func codexIn(at place) *Agent {
 			chatgpt := !api() && chatGPT()
 			if chatgpt && !out() && ours {
 				forget(at.key("codex.out"))
-				if err := dropProvider(); err != nil {
-					return err
-				}
 				// for the threads started while magpie was the provider
 				if err := putProvider(); err != nil {
 					return err
 				}
 				// the base URL is the built-in provider's, and a catalog
 				// file would stand in for the list magpie hands out
-				if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
+				if err := leaveProvider(); err != nil {
 					return err
 				}
 				if err := edit.SetTOMLTop(path,
@@ -1853,8 +1898,17 @@ func codexIn(at place) *Agent {
 			if err := putProvider(); err != nil {
 				return err
 			}
+			if c := get("model_catalog_json"); c != "" && !localCatalog() {
+				if err := edit.DelTOMLTop(path, "model_catalog_json"); err != nil {
+					return err
+				}
+			}
 			if err := ownList(); err != nil {
 				return err
+			}
+			ref := get("model_catalog_json")
+			if ref == "" {
+				ref = catalogRef
 			}
 			// a thread started on Codex's built-in provider stays on it when
 			// opened again, and its model can be switched to one of magpie's
@@ -1863,7 +1917,7 @@ func codexIn(at place) *Agent {
 			// which refuses it (#259). A base URL of the user's own stays.
 			kv := []edit.KV{
 				{Path: "model_provider", Value: magpieID},
-				{Path: "model_catalog_json", Value: catalogRef},
+				{Path: "model_catalog_json", Value: ref},
 				{Path: "model", Value: v},
 			}
 			if u := get("openai_base_url"); u == "" || viaBase() {
@@ -1890,7 +1944,7 @@ func codexIn(at place) *Agent {
 			// (eddie.zhan on Discord, Always ChatGPT from the takeover)
 			if asProvider() && stashShared()[at.key("codex.out")] == "1" && !out() {
 				forget(at.key("codex.out"), at.key("codex.out_own"), at.key("codex.out_stand"))
-				if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
+				if err := leaveProvider(); err != nil {
 					return err
 				}
 				if err := edit.SetTOMLTop(path,
@@ -1982,14 +2036,11 @@ func codexIn(at place) *Agent {
 					at.key("codex.provider"): get("model_provider"), at.key("codex.catalog"): get("model_catalog_json")})
 			}
 			forget(at.key("codex.out"))
-			if err := dropProvider(); err != nil {
-				return false, err
-			}
 			// for the threads started on one of magpie's models
 			if err := putProvider(); err != nil {
 				return false, err
 			}
-			if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
+			if err := leaveProvider(); err != nil {
 				return false, err
 			}
 			if err := edit.SetTOMLTop(path, edit.KV{Path: "openai_base_url", Value: at.codexURL()}); err != nil {
@@ -2014,7 +2065,7 @@ func codexIn(at place) *Agent {
 		AppOut:    func() bool { return asProvider() && !api() && chatGPT() && stashShared()[at.key("codex.out")] == "1" },
 		AppOutOff: func() bool { return stashShared()[at.key("codex.login")] == "chatgpt" || !routed() },
 		DeskAt: func() time.Time {
-			if !deskCatalog(get("model_catalog_json")) {
+			if get("model_catalog_json") == "" {
 				return time.Time{}
 			}
 			n, err := strconv.ParseInt(stashShared()[at.key("codex.desk_at")], 10, 64)
@@ -2191,7 +2242,7 @@ func codexIn(at place) *Agent {
 					// back beside the sign-in on the one picked, as Join
 					// leaves it: Codex's own sign-in, magpie's models joined
 					forget(at.key("codex.out_own"), at.key("codex.out"), at.key("codex.out_stand"))
-					if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
+					if err := leaveProvider(); err != nil {
 						return err
 					}
 					if err := edit.SetTOMLTop(path,
@@ -2233,10 +2284,10 @@ func codexIn(at place) *Agent {
 				}
 			}
 			switch {
-			case asProvider() && ownCatalog(get("model_catalog_json")):
+			case asProvider() && localCatalog():
 				// set up by a magpie from before #259: the threads started
 				// on Codex's built-in provider reach magpie too
-				if get("openai_base_url") == "" {
+				if get("openai_base_url") == "" && (ownCatalog(get("model_catalog_json")) || deskCatalog(get("model_catalog_json"))) {
 					if err := edit.SetTOMLTop(path, edit.KV{Path: "openai_base_url", Value: at.codexURL()}); err != nil {
 						return err
 					}
@@ -2298,11 +2349,16 @@ func codexIn(at place) *Agent {
 				if t["base_url"] != at.v1() || !keyHolds(t["experimental_bearer_token"], at.gwKey()) || t["wire_api"] != "responses" {
 					return "Codex's [model_providers.magpie] no longer points at magpie's gateway (" + at.v1() + ")"
 				}
-				if c := get("model_catalog_json"); !ownCatalog(c) {
-					return "Codex's model_catalog_json is no longer magpie's list"
+				c := get("model_catalog_json")
+				if c == "" {
+					return "Codex's model_catalog_json no longer names its model list"
 				}
-				if _, err := os.Stat(catalogPath); err != nil {
-					return "magpie's model list for Codex (" + catalogPath + ") is gone"
+				file, err := codexCatalogFile(at, dir, c)
+				if err != nil {
+					return err.Error()
+				}
+				if _, err := os.Stat(file); err != nil {
+					return "Codex's model list (" + file + ") is unavailable: " + err.Error()
 				}
 			case viaBase():
 				if u := get("openai_base_url"); strings.TrimSuffix(u, "/") != at.codexURL() {

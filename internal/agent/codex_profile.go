@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
@@ -20,7 +21,8 @@ import (
 // magpie.config.toml alone: model_provider, model, effort, the catalog and
 // its own [model_providers.magpie]. config.toml, its top-level
 // model_provider, model and openai_base_url are never touched. Disconnect
-// deletes that file and magpie's catalog. It is chosen by the Codex agent's
+// deletes those files only when no local catalog customization remains.
+// It is chosen by the Codex agent's
 // "applies to" field, which changes only while Codex is not connected, so
 // the two wirings never meet in one config.
 
@@ -29,6 +31,27 @@ const codexScopeKey = "codex.scope"
 
 // codexProfileFile is the file `codex -p magpie` reads.
 const codexProfileFile = magpieID + ".config.toml"
+
+// Codex resolves relative catalog names from its home. A distro's absolute
+// path uses its existing system mapping, or the known home mapping alone.
+func codexCatalogFile(at place, dir, ref string) (string, error) {
+	if at.spell != nil && strings.HasPrefix(ref, "/") {
+		if at.sys != nil {
+			return at.open(at.sys(ref)), nil
+		}
+		base := strings.TrimRight(at.native(dir), "/") + "/"
+		if !strings.HasPrefix(ref, base) {
+			return "", fmt.Errorf("cannot resolve Codex catalog %q outside its known WSL home", ref)
+		}
+		ref = strings.TrimPrefix(ref, base)
+	} else if at.spell != nil && filepath.IsAbs(ref) {
+		return "", fmt.Errorf("cannot resolve Codex catalog %q as a WSL path", ref)
+	}
+	if !filepath.IsAbs(ref) {
+		return at.open(filepath.Join(dir, filepath.FromSlash(ref))), nil
+	}
+	return at.open(filepath.Clean(ref)), nil
+}
 
 // codexProviderTable is magpie's [model_providers.magpie], with token as
 // the bearer key.
@@ -106,9 +129,19 @@ func codexProfileIn(at place) *Agent {
 	get := func(k string) string { v, _ := edit.GetTOMLTop(path, k); return v }
 	// the catalog as Codex reads it from this file: beside it, so by name
 	catalogRef := filepath.Base(catalogPath)
+	listPath := func() (string, error) {
+		if ref := get("model_catalog_json"); ref != "" {
+			return codexCatalogFile(at, dir, ref)
+		}
+		return catalogPath, nil
+	}
 	list := func() []byte { return codexcat.CatalogAt(magpieModels("codex"), get("model_reasoning_effort")) }
 	ownList := func() error {
-		return writeCodexCatalog(catalogPath, func() ([]byte, error) { return list(), nil }, true)
+		file, err := listPath()
+		if err != nil {
+			return err
+		}
+		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true)
 	}
 	// the list goes with the profile, unless the user added to it
 	dropList := func() {
@@ -136,15 +169,27 @@ func codexProfileIn(at place) *Agent {
 		if err := ownList(); err != nil {
 			return err
 		}
+		ref := get("model_catalog_json")
+		if ref == "" {
+			ref = catalogRef
+		}
 		return edit.SetTOMLTop(path,
 			edit.KV{Path: "model_provider", Value: magpieID},
-			edit.KV{Path: "model_catalog_json", Value: catalogRef},
+			edit.KV{Path: "model_catalog_json", Value: ref},
 			edit.KV{Path: "model", Value: model},
 		)
 	}
-	// drop removes magpie's profile and its list: these two files only
+	// A customized catalog keeps its reference for the next connection.
 	drop := func() error {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		file, err := listPath()
+		if get("model_catalog_json") != "" && (err != nil || filepath.Clean(file) != filepath.Clean(catalogPath) || codexCatalogPending(file)) {
+			if err := edit.DelTOMLTop(path, "model_provider", "model", "model_reasoning_effort"); err != nil {
+				return err
+			}
+			if err := edit.DelTOMLTable(path, table); err != nil {
+				return err
+			}
+		} else if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		dropList()
@@ -161,7 +206,7 @@ func codexProfileIn(at place) *Agent {
 				// magpie serves now (the provider of the model it was set
 				// to was deleted): the list is still magpie's, and Codex
 				// would keep offering the models it had (JNDliuliuM on X)
-				if get("model_provider") == magpieID && get("model_catalog_json") == catalogRef {
+				if get("model_provider") == magpieID && get("model_catalog_json") != "" {
 					return ownList()
 				}
 				return nil

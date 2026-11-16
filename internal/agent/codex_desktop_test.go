@@ -1,11 +1,15 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // codexAppReads has the Codex app (and a CLI) read every config when app
@@ -51,6 +55,22 @@ func TestCodexDesktopListBesideSignIn(t *testing.T) {
 	codexAppReads(t, &app)
 	list := `{"models":[{"slug":"gpt-6-sol","base_instructions":"theirs"},{"slug":"fake/m1"}]}`
 	deskListIs(t, &list)
+	models := func() map[string]map[string]any {
+		t.Helper()
+		var cat struct {
+			Models []map[string]any `json:"models"`
+		}
+		if err := json.Unmarshal([]byte(readFile(desk)), &cat); err != nil {
+			t.Fatalf("decode desktop catalog: %v", err)
+		}
+		out := make(map[string]map[string]any, len(cat.Models))
+		for _, model := range cat.Models {
+			if slug, _ := model["slug"].(string); slug != "" {
+				out[slug] = model
+			}
+		}
+		return out
+	}
 
 	cx := codex(home)
 	if ok, err := cx.Join(); err != nil || !ok {
@@ -63,8 +83,9 @@ func TestCodexDesktopListBesideSignIn(t *testing.T) {
 	if strings.Contains(cfg, "model_provider =") {
 		t.Fatalf("Codex's provider changed:\n%s", cfg)
 	}
-	if b, err := os.ReadFile(desk); err != nil || string(b) != list {
-		t.Fatalf("the app's list: %q %v", b, err)
+	initial := models()
+	if initial["gpt-6-sol"]["base_instructions"] != "theirs" || initial["fake/m1"] == nil {
+		t.Fatalf("the app's list lost its models or instructions: %#v", initial)
 	}
 	// connected beside the sign-in, as before: not magpie as its provider
 	if !cx.Joined() || cx.AppOut() {
@@ -79,21 +100,24 @@ func TestCodexDesktopListBesideSignIn(t *testing.T) {
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(desk); string(b) != list {
-		t.Fatalf("not written again: %s", b)
+	updated := models()
+	if updated["gpt-6-sol"]["base_instructions"] != "theirs" || updated["fake/m2"] == nil || updated["fake/m1"] != nil {
+		t.Fatalf("model update changed the wrong entries: %#v", updated)
 	}
 
 	// a list not known now (the backend not answering) is unknown: the
 	// file as it was stays, never an empty one
-	was := list
+	was, err := os.ReadFile(desk)
+	if err != nil {
+		t.Fatal(err)
+	}
 	list = ""
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(desk); string(b) != was || !strings.Contains(read(), "magpie-desktop-models.json") {
+	if b, _ := os.ReadFile(desk); string(b) != string(was) || !strings.Contains(read(), "magpie-desktop-models.json") {
 		t.Fatalf("unknown list: %s\n%s", b, read())
 	}
-	list = was
 
 	// a magpie model picked beside the sign-in: still Codex's provider,
 	// the list still the app's
@@ -104,16 +128,18 @@ func TestCodexDesktopListBesideSignIn(t *testing.T) {
 		t.Fatalf("beside: %v\n%s", cx.Beside(), cfg)
 	}
 
-	// magpie API: magpie's own catalog, as magpie is Codex's provider, and
-	// the app's list gone
+	// magpie API keeps the same local catalog while changing its source.
 	if err := cx.Field("login").Set("api"); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); !strings.Contains(cfg, `model_provider = "magpie"`) || strings.Contains(cfg, "magpie-desktop-models.json") {
+	if cfg := read(); !strings.Contains(cfg, `model_provider = "magpie"`) || !strings.Contains(cfg, "magpie-desktop-models.json") {
 		t.Fatalf("api:\n%s", cfg)
 	}
-	if _, err := os.Stat(desk); !os.IsNotExist(err) {
-		t.Fatalf("api: the app's list is still there: %v", err)
+	if _, err := os.Stat(desk); err != nil {
+		t.Fatalf("api: the local catalog is gone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "magpie-models.json")); !os.IsNotExist(err) {
+		t.Fatalf("api: wrote a second catalog: %v", err)
 	}
 	if err := cx.Field("login").Set(""); err != nil {
 		t.Fatal(err)
@@ -250,7 +276,8 @@ func TestCodexDesktopListNamedAt(t *testing.T) {
 	if !cx.DeskAt().Equal(at) {
 		t.Fatalf("named at %v after a new list, want %v", cx.DeskAt(), at)
 	}
-	// magpie API: the list goes, and with it the time
+	// The catalog stays named while magpie is the provider, so a temporary
+	// login change does not restart its naming time.
 	if err := cx.Fields[0].Set("fake/m1"); err != nil {
 		t.Fatal(err)
 	}
@@ -260,14 +287,99 @@ func TestCodexDesktopListNamedAt(t *testing.T) {
 	if err := cx.Field("login").Set("api"); err != nil {
 		t.Fatal(err)
 	}
-	if !cx.DeskAt().IsZero() {
+	if !cx.DeskAt().Equal(at) {
 		t.Fatalf("api: named at %v\n%s", cx.DeskAt(), read())
 	}
-	// back beside the sign-in: named again, at a time of its own
+	// Back beside the sign-in, it is still the same file.
 	if err := cx.Field("login").Set(""); err != nil {
 		t.Fatal(err)
 	}
-	if again := cx.DeskAt(); !again.After(at) {
-		t.Fatalf("named again at %v, want after %v\n%s", again, at, read())
+	if again := cx.DeskAt(); !again.Equal(at) {
+		t.Fatalf("named again at %v, want %v\n%s", again, at, read())
+	}
+}
+
+func TestCodexLocalCatalogPathSurvivesTransitions(t *testing.T) {
+	for _, name := range []string{"magpie-desktop-models.json", "my-models.json"} {
+		t.Run(name, func(t *testing.T) {
+			home, _ := codexHome(t, chatGPTAuth, "model = \"gpt-5.5\"\nmodel_catalog_json = \""+name+"\"\n")
+			dir := filepath.Join(home, ".codex")
+			local := filepath.Join(dir, name)
+			writeFile(t, local, `{"title":"my catalog","models":[{"slug":"fake/m1","base_instructions":"my instruction","custom":true}]}`)
+			app := true
+			codexAppReads(t, &app)
+			list := `{"models":[{"slug":"gpt-5.5"},{"slug":"fake/m1","base_instructions":"vendor instruction"}]}`
+			deskListIs(t, &list)
+			cx := codex(home)
+			check := func(when string) {
+				t.Helper()
+				if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != name {
+					t.Fatalf("%s: catalog path %q, want %q", when, ref, name)
+				}
+				b := readFile(local)
+				if !strings.Contains(b, "my catalog") || !strings.Contains(b, "my instruction") || !strings.Contains(b, `"custom":true`) && !strings.Contains(b, `"custom": true`) {
+					t.Fatalf("%s: local customizations lost: %s", when, b)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "magpie-models.json")); !os.IsNotExist(err) {
+					t.Fatalf("%s: wrote a second catalog: %v", when, err)
+				}
+				if msg := cx.Check(); msg != "" {
+					t.Fatalf("%s: %s", when, msg)
+				}
+			}
+			if ok, err := cx.Join(); err != nil || !ok {
+				t.Fatalf("join: %v %v", ok, err)
+			}
+			check("join")
+			if cx.DeskAt().IsZero() {
+				t.Fatal("synchronizing an existing catalog missed the desktop reload notice")
+			}
+			if err := cx.Apply("model", "fake/m1"); err != nil {
+				t.Fatal(err)
+			}
+			check("model pick")
+			if err := cx.Field("login").Set("api"); err != nil {
+				t.Fatal(err)
+			}
+			check("API")
+			if err := provider.Save(provider.Provider{ID: "added", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"m2"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := codex(home).Sync(); err != nil {
+				t.Fatal(err)
+			}
+			check("provider sync")
+			if !strings.Contains(readFile(local), "added/m2") {
+				t.Fatal("provider model did not reach the local catalog")
+			}
+			list = `{"models":[{"slug":"gpt-5.5"},{"slug":"fake/m1","base_instructions":"vendor instruction"},{"slug":"added/m2"}]}`
+			if err := cx.Field("login").Set(""); err != nil {
+				t.Fatal(err)
+			}
+			check("ChatGPT")
+			codexUsedUp = func() bool { return true }
+			if err := cx.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			check("ChatGPT held")
+			codexUsedUp = func() bool { return false }
+			if err := cx.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			check("ChatGPT recovered")
+			if err := cx.Disconnect(); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(readFile(local), "my instruction") {
+				t.Fatal("disconnect removed the local catalog")
+			}
+			if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != name {
+				t.Fatalf("disconnect lost the customized catalog reference: %q", ref)
+			}
+			if err := cx.Apply("model", "fake/m1"); err != nil {
+				t.Fatal(err)
+			}
+			check("reconnect")
+		})
 	}
 }

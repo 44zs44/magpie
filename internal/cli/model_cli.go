@@ -195,7 +195,7 @@ func modelCmd(args []string) error {
 			return err
 		}
 		fmt.Println("Codex catalog fields imported; reload Codex to read its updated catalog")
-		fmt.Println("Only the selected fields were imported. Unselected fields in a previously untracked managed catalog regenerate from Magpie settings; custom files remain user-owned.")
+		fmt.Println("Only the selected fields were imported. Other local catalog customizations and model_catalog_json stay as they are.")
 		return nil
 	case "id":
 		return modelID(args[1:])

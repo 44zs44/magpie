@@ -489,8 +489,16 @@ from its members, so an image edit on the group is refused. Unknown fields,
 invalid types and unavailable models are refused before configuration is
 written. A storage failure leaves the catalog and its synchronization
 baseline unchanged; already saved values can be retried without repeated
-notifications. `CodexModelEditState` supplies explicitly configured values
-for the synchronization conflict check, excluding upstream defaults.
+notifications. `CodexModelEditState` supplies explicitly configured values,
+excluding upstream defaults, so catalog synchronization can recognize a
+settings change even when its generated value equals the previous default.
+Normal catalog sync imports changes to the local reasoning effort selection
+into these shared model preferences; the provider editor reads the same
+`ModelEfforts`/`ModelReasonless` state. Other local fields stay in the JSON
+unless `codex-import` explicitly selects them. Deliberately removing a
+previously synchronized model from the JSON uses the existing global
+`DisabledModels` configuration. The local snapshots, deletion detection and
+restore rules belong to [agent wiring](agent-wiring.md#editable-codex-catalogs).
 
 `TestCodexCatalogEditsPersistInModelSettings`,
 `TestCodexCatalogEditsRefuseWholeInvalidImport` and

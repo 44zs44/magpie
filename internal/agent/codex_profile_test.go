@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
-func TestCodexProfileCatalogImportsInstructions(t *testing.T) {
+func TestCodexProfileCatalogKeepsInstructionsLocally(t *testing.T) {
 	home, read := codexHome(t, "", "")
 	cx := codex(home)
 	if err := cx.Field("scope").Set("profile"); err != nil {
@@ -30,8 +32,8 @@ func TestCodexProfileCatalogImportsInstructions(t *testing.T) {
 	if err := codex(home).Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if settings.Load().ModelCodexInstructions["fake/m1"] != "profile instructions" {
-		t.Fatal("profile edit not saved")
+	if settings.Load().ModelCodexInstructions["fake/m1"] != "" || !strings.Contains(readFile(path), "profile instructions") {
+		t.Fatal("profile edit was lost or written back into provider settings")
 	}
 	if read() != original {
 		t.Fatal("profile import changed main Codex config")
@@ -95,6 +97,86 @@ func TestCodexProfileOnlyLeavesConfigTomlAlone(t *testing.T) {
 	}
 	if read() != own || codex(home).Wired() {
 		t.Fatalf("after disconnect:\n%s", read())
+	}
+}
+
+func TestCodexProfileKeepsLocalCatalogPath(t *testing.T) {
+	home, read := codexHome(t, "", "model = \"gpt-5.5\"\n")
+	cx := codex(home)
+	if err := cx.Field("scope").Set("profile"); err != nil {
+		t.Fatal(err)
+	}
+	cx = codex(home)
+	writeFile(t, cx.Path, "model_catalog_json = \"my-models.json\"\n")
+	local := filepath.Join(home, ".codex", "my-models.json")
+	writeFile(t, local, `{"title":"my catalog","models":[{"slug":"fake/m1","base_instructions":"my instruction"}]}`)
+	if err := cx.Apply("model", "fake/m1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "added", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := codex(home).Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "my-models.json" {
+		t.Fatalf("profile catalog path changed: %q", ref)
+	}
+	for _, want := range []string{"my catalog", "my instruction", "added/m2"} {
+		if !strings.Contains(readFile(local), want) {
+			t.Fatalf("local catalog lost %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "magpie-models.json")); !os.IsNotExist(err) {
+		t.Fatalf("profile wrote a second catalog: %v", err)
+	}
+	if err := cx.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readFile(local), "my instruction") {
+		t.Fatal("profile disconnect removed the user's catalog")
+	}
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "my-models.json" {
+		t.Fatalf("profile disconnect lost the local catalog reference: %q", ref)
+	}
+	if err := cx.Apply("model", "fake/m1"); err != nil {
+		t.Fatal(err)
+	}
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "my-models.json" || !strings.Contains(readFile(local), "my instruction") {
+		t.Fatal("profile reconnect lost the local catalog")
+	}
+	if read() != "model = \"gpt-5.5\"\n" {
+		t.Fatal("profile changed config.toml")
+	}
+}
+
+func TestCodexCatalogFileUsesCodexHome(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".codex")
+	ws := place{spell: func(string) string { return "/home/alice/.codex" }}
+	mapped := place{spell: ws.spell, sys: func(ref string) string { return filepath.Join(dir, "distro", filepath.FromSlash(ref)) }}
+	for _, tt := range []struct {
+		name string
+		at   place
+		ref  string
+		want string
+	}{
+		{"relative", place{}, "models/custom.json", filepath.Join(dir, "models", "custom.json")},
+		{"absolute", place{}, filepath.Join(dir, "custom.json"), filepath.Join(dir, "custom.json")},
+		{"WSL relative", ws, "models/custom.json", filepath.Join(dir, "models", "custom.json")},
+		{"WSL native", ws, "/home/alice/.codex/custom.json", filepath.Join(dir, "custom.json")},
+		{"WSL mapped absolute", mapped, "/opt/custom.json", filepath.Join(dir, "distro", "opt", "custom.json")},
+		{"WSL unknown", ws, "/opt/custom.json", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := codexCatalogFile(tt.at, dir, tt.ref)
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("unknown WSL path accepted: %q", got)
+				}
+			} else if err != nil || got != tt.want {
+				t.Fatalf("path %q, error %v, want %q", got, err, tt.want)
+			}
+		})
 	}
 }
 

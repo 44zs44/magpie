@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -152,6 +153,25 @@ func TestReseatDelete(t *testing.T) {
 	// nothing else serves it: Claude Code as installed
 	if got := c.Field("model").Get(); got != "" {
 		t.Fatalf("claude: %q", got)
+	}
+}
+
+func TestReseatCodexKeepsLocalCatalog(t *testing.T) {
+	home := reseatHome(t)
+	dir := filepath.Join(home, ".codex")
+	writeFile(t, filepath.Join(dir, "config.toml"), "model_catalog_json = \"my-models.json\"\n")
+	local := filepath.Join(dir, "my-models.json")
+	writeFile(t, local, `{"title":"my catalog","models":[]}`)
+	cx := mustFind(t, "codex")
+	mustApply(t, cx, "model", "cop/gpt-5")
+	if _, err := Reseat(func() error { return provider.SetOff("cop", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "my-models.json" {
+		t.Fatalf("reseat changed catalog path: %q", ref)
+	}
+	if b := readFile(local); !strings.Contains(b, "my catalog") || !strings.Contains(b, "ds/gpt-5") || strings.Contains(b, `"cop/gpt-5"`) {
+		t.Fatalf("reseat lost the local base or model updates:\n%s", b)
 	}
 }
 

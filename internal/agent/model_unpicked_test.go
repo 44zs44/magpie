@@ -20,15 +20,26 @@ func TestCodexLeavesAModelUncheckedInItsProvider(t *testing.T) {
 	for _, c := range []struct {
 		name, auth, scope string
 		file              string
+		local             bool
 	}{
-		{"as its provider", "", "", "config.toml"},
-		{"beside the sign-in", signedIn, "", "config.toml"},
-		{"by its profile", "", "profile", codexProfileFile},
+		{"as its provider", "", "", "config.toml", false},
+		{"beside the sign-in", signedIn, "", "config.toml", false},
+		{"by its profile", "", "profile", codexProfileFile, false},
+		{"provider with local catalog", "", "", "config.toml", true},
+		{"sign-in with local catalog", signedIn, "", "config.toml", true},
+		{"profile with local catalog", "", "profile", codexProfileFile, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home, _ := codexHome(t, c.auth, "")
 			if c.scope != "" {
 				stash(map[string]string{codexScopeKey: c.scope})
+			}
+			path := filepath.Join(home, ".codex", c.file)
+			list := filepath.Join(home, ".codex", "magpie-models.json")
+			if c.local {
+				list = filepath.Join(home, ".codex", "my-models.json")
+				writeFile(t, list, `{"title":"my catalog","models":[]}`)
+				writeFile(t, path, "model_catalog_json = \"my-models.json\"\n")
 			}
 			sub := provider.Provider{ID: "sub", Name: "Sub", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"old", "keep"}}
 			if err := provider.Save(sub); err != nil {
@@ -37,7 +48,6 @@ func TestCodexLeavesAModelUncheckedInItsProvider(t *testing.T) {
 			if err := codex(home).Fields[0].Set("sub/old"); err != nil {
 				t.Fatal(err)
 			}
-			path := filepath.Join(home, ".codex", c.file)
 			model := func() string { v, _ := edit.GetTOMLTop(path, "model"); return v }
 			if model() != "sub/old" {
 				t.Fatalf("not set to begin with:\n%s", readFile(path))
@@ -62,8 +72,13 @@ func TestCodexLeavesAModelUncheckedInItsProvider(t *testing.T) {
 			if got := model(); got != "sub/new" {
 				t.Fatalf("model = %q after sub/old was unchecked, want the provider's first pick sub/new:\n%s", got, readFile(path))
 			}
-			if l := readFile(filepath.Join(home, ".codex", "magpie-models.json")); c.auth == "" && (!strings.Contains(l, `"sub/new"`) || strings.Contains(l, `"sub/old"`)) {
+			if l := readFile(list); (c.auth == "" || c.local) && (!strings.Contains(l, `"sub/new"`) || strings.Contains(l, `"sub/old"`)) {
 				t.Errorf("Codex's list is not the provider's picks:\n%s", l)
+			}
+			if c.local {
+				if ref, _ := edit.GetTOMLTop(path, "model_catalog_json"); ref != "my-models.json" || !strings.Contains(readFile(list), "my catalog") {
+					t.Fatalf("automatic model replacement lost the local catalog: %q\n%s", ref, readFile(list))
+				}
 			}
 		})
 	}

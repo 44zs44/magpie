@@ -122,11 +122,18 @@ func (a *Agent) startsWith() (pats []string, files []string, reads func() string
 	switch a.ID {
 	case "codex":
 		list, desk := codexLists(a.Path)
-		return []string{`(^|/)codex( |$)`}, []string{a.Path, list, desk}, func() string {
+		files := []string{a.Path, list, desk}
+		if ref, _ := edit.GetTOMLTop(a.Path, "model_catalog_json"); ref != "" {
+			if local, err := codexCatalogFile(place{}, filepath.Dir(a.Path), ref); err == nil && !slices.Contains(files, local) {
+				files = append(files, local)
+			}
+		}
+		return []string{`(^|/)codex( |$)`}, files, func() string {
 			var b strings.Builder
 			codexWiring(&b, a.Path)
-			b.WriteString(listedModels(list))
-			b.WriteString(listedModels(desk))
+			for _, file := range files[1:] {
+				b.WriteString(listedModels(file))
+			}
 			return b.String()
 		}
 	case "claude":

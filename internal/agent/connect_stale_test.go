@@ -20,6 +20,33 @@ import (
 // daemon as last checked (TestCodexStaleOnWindowsIsTheDaemonsLastCheck).
 const staleOnWindows = "Windows lists no processes for StaleCopies; see TestCodexStaleOnWindowsIsTheDaemonsLastCheck"
 
+func TestCodexCustomCatalogChangesItsStartTime(t *testing.T) {
+	for _, absolute := range []bool{false, true} {
+		t.Run(strconv.FormatBool(absolute), func(t *testing.T) {
+			home, _ := codexHome(t, "", "")
+			dir := filepath.Join(home, ".codex")
+			local := filepath.Join(dir, "my-models.json")
+			ref := "my-models.json"
+			if absolute {
+				ref = filepath.ToSlash(local)
+			}
+			writeFile(t, filepath.Join(dir, "config.toml"), "model_catalog_json = \""+ref+"\"\n")
+			writeFile(t, local, `{"models":[{"slug":"fake/m1"}]}`)
+			then := time.Now().Add(-time.Hour)
+			os.Chtimes(filepath.Join(dir, "config.toml"), then, then)
+			os.Chtimes(local, then, then)
+			cx := codex(home)
+			_, files, reads := cx.startsWith()
+			first := cx.changedAt(files, reads)
+			writeFile(t, local, `{"models":[{"slug":"fake/m1"},{"slug":"fake/m2"}]}`)
+			os.Chtimes(local, then, then)
+			if next := cx.changedAt(files, reads); !next.After(first) {
+				t.Fatalf("custom catalog changed without updating Codex's start time: %v -> %v", first, next)
+			}
+		})
+	}
+}
+
 // Codex writes config.toml itself (a project's trust, a notice seen), so a
 // copy reopened after magpie's change and then writing there was still
 // told to reopen; an app-server daemon left running for another
