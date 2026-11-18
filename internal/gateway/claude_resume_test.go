@@ -128,13 +128,18 @@ func (h *resumeHarness) ask(system string, said ...string) {
 	}
 }
 
-// runs is each run's log, the arguments it started with first.
+// runs is each model run's log, the arguments it started with first.
 func (h *resumeHarness) runs() map[string]string {
 	out := map[string]string{}
 	entries, _ := os.ReadDir(h.logs)
 	for _, e := range entries {
 		b, _ := os.ReadFile(filepath.Join(h.logs, e.Name()))
-		out[e.Name()] = string(b)
+		log := string(b)
+		// Version discovery invokes the stand-in too, without a model request.
+		if strings.HasPrefix(log, "args --version\n") {
+			continue
+		}
+		out[e.Name()] = log
 	}
 	return out
 }

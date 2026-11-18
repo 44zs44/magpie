@@ -185,17 +185,12 @@ func TestClaudeTUIToolLoopCarriesEachBatchsSafeguards(t *testing.T) {
 			`,{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"file ` + fmt.Sprint(n) + `"}]}`
 	}
 	b, _ := os.ReadFile(log)
-	if starts := strings.Count(string(b), "args "); starts != 1 {
-		t.Fatalf("the tool loop started %d runs, want one:\n%s", starts, b)
+	starts, got := claudeLog(t, log)
+	if len(starts) != 1 {
+		t.Fatalf("the tool loop started %d runs, want one:\n%s", len(starts), b)
 	}
 	if !strings.HasSuffix(text, " done") {
 		t.Fatalf("the turn's end: %q\n%s", text, b)
-	}
-	var got []string
-	for _, l := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(l, "sent "); ok {
-			got = append(got, v)
-		}
 	}
 	if len(got) != len(sent) {
 		t.Fatalf("%d requests, want %d:\n%s", len(got), len(sent), b)

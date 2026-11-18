@@ -44,13 +44,13 @@ func lastContent(t *testing.T, body []byte) (kind, text string) {
 	return last.Type, last.Text
 }
 
-// claudeLog is the fake Claude Code's log: its starts' arguments, and
-// the guard file as each request carried it.
+// claudeLog is the fake Claude Code's model starts, excluding version probes,
+// and the guard file as each request carried it.
 func claudeLog(t *testing.T, path string) (starts, sent []string) {
 	t.Helper()
 	b, _ := os.ReadFile(path)
 	for _, l := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(l, "args "); ok {
+		if v, ok := strings.CutPrefix(l, "args "); ok && v != "--version" {
 			starts = append(starts, v)
 		}
 		if v, ok := strings.CutPrefix(l, "sent "); ok {
