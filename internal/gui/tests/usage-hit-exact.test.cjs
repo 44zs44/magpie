@@ -78,7 +78,7 @@ function serve(lang) {
 const LANGS = ["en", "zh", "zh-TW", "ja", "de"];
 const TIP = "{a} of {b} prompt tokens read from the cache: {p}";
 const HELD = "It came in under a second after a wait of {wait}: it may have been written during the wait and let go at once, so how fast it was written isn't seen";
-const SPEED_HEAD = "Output tokens a second after the first, over the streamed replies";
+const SPEED_HEAD = "Output tokens a second over each request's whole time";
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   test(`${engine}: every Usage hit rate has two decimals and its exact share on hover; a speed's dash says why`, async (t) => {
