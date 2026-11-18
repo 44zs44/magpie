@@ -3,9 +3,11 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/testenv"
@@ -207,6 +209,10 @@ func TestCodexOffAndOnJoinsAgainWithItsHelpersOnMagpie(t *testing.T) {
 				}
 			}
 			cfg, joined, beside := read(), cx.Joined(), cx.Beside()
+			var before map[string]any
+			if err := toml.Unmarshal([]byte(cfg), &before); err != nil {
+				t.Fatal(err)
+			}
 			if err := cx.Disconnect(); err != nil {
 				t.Fatal(err)
 			}
@@ -225,7 +231,11 @@ func TestCodexOffAndOnJoinsAgainWithItsHelpersOnMagpie(t *testing.T) {
 				}
 			}
 			how, err := cx.ConnectHow()
-			if err != nil || how.How != "again" || read() != cfg || cx.Joined() != joined || cx.Beside() != beside {
+			var after map[string]any
+			if err := toml.Unmarshal([]byte(read()), &after); err != nil {
+				t.Fatal(err)
+			}
+			if err != nil || how.How != "again" || !reflect.DeepEqual(after, before) || cx.Joined() != joined || cx.Beside() != beside {
 				t.Fatalf("on again (%+v, %v), joined %v and beside %v, were %v and %v:\n%s\nwas\n%s", how, err, cx.Joined(), cx.Beside(), joined, beside, read(), cfg)
 			}
 			for _, k := range c.fields {

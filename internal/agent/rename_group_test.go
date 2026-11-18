@@ -71,8 +71,8 @@ func TestRenameGroupMovesTheAgentsOnIt(t *testing.T) {
 }
 
 // A change to the list alone never restarts the Codex app's app-server:
-// a provider renamed rewrites the catalog, and the app shows the new name
-// at its next launch (TestCodexEffortPickKeepsTheAppRunning says why).
+// a provider's display-name change preserves the existing local catalog
+// (TestCodexEffortPickKeepsTheAppRunning says why the route stays).
 func TestCodexAppRouteIgnoresARename(t *testing.T) {
 	home := syncHome(t)
 	codexCat := filepath.Join(home, ".codex", "magpie-models.json")
@@ -86,12 +86,16 @@ func TestCodexAppRouteIgnoresARename(t *testing.T) {
 	if !strings.Contains(readFile(codexCat), "GLM-4.6 · Relay") {
 		t.Fatalf("catalog:\n%s", readFile(codexCat))
 	}
+	local := readFile(codexCat)
 	if err := provider.Save(provider.Provider{ID: "relay", Name: "Renamed", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"glm-4.6"}}); err != nil {
 		t.Fatal(err)
 	}
 	SyncCatalog()
-	if !strings.Contains(readFile(codexCat), "GLM-4.6 · Renamed") {
-		t.Fatalf("catalog not rewritten:\n%s", readFile(codexCat))
+	if got := readFile(codexCat); got != local {
+		t.Fatal("a provider's new display name replaced the local catalog")
+	}
+	if model, _ := edit.GetTOMLTop(filepath.Join(home, ".codex", "config.toml"), "model"); model != "relay/glm-4.6" {
+		t.Fatalf("a display-name change moved the model to %q", model)
 	}
 	if r, _, _ := codexAppRoute(); r != before {
 		t.Fatal("a provider renamed changed the Codex app's route: its app-server is ended for a list")

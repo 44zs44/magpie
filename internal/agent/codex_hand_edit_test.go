@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/edit"
 )
 
 // Disconnect puts back only what magpie changed: a key the user edited by
@@ -45,12 +47,15 @@ func TestCodexDisconnectKeepsHandEdits(t *testing.T) {
 	}
 }
 
-// What magpie changed and the user didn't is put back as it was.
+// The model and effort are put back; the local catalog remains for reconnect.
 func TestCodexDisconnectPutsBackWhatMagpieChanged(t *testing.T) {
 	home, read := codexHome(t, "", "model = \"gpt-5.5\"\nmodel_reasoning_effort = \"low\"\n")
 	if err := codex(home).Fields[0].Set("fake/m1"); err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(home, ".codex", "magpie-models.json")
+	kept := readFile(path)
+	ref, _ := edit.GetTOMLTop(codex(home).Path, "model_catalog_json")
 	if err := codex(home).Disconnect(); err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +65,11 @@ func TestCodexDisconnectPutsBackWhatMagpieChanged(t *testing.T) {
 			t.Errorf("missing %q after Disconnect:\n%s", want, cfg)
 		}
 	}
-	if strings.Contains(cfg, "model_catalog_json") || strings.Contains(cfg, "model_provider =") {
+	if strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "openai_base_url") {
 		t.Errorf("magpie's keys left:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(codex(home).Path, "model_catalog_json"); got != ref || readFile(path) != kept {
+		t.Fatal("disconnect changed the local catalog or its path")
 	}
 }
 

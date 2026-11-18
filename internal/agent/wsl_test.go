@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
 )
 
@@ -128,6 +129,7 @@ func TestWSLCodexProvider(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".codex", "magpie-models.json")); err != nil {
 		t.Fatal(err)
 	}
+	catalog := readFile(filepath.Join(home, ".codex", "magpie-models.json"))
 	if c := a.Check(); c != "" {
 		t.Fatal(c)
 	}
@@ -140,8 +142,11 @@ func TestWSLCodexProvider(t *testing.T) {
 	if err := a.Fields[0].Set("gpt-5.4"); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") {
+	if cfg := read(); strings.Contains(cfg, "model_provider =") {
 		t.Fatalf("back:\n%s", cfg)
+	}
+	if ref, _ := edit.GetTOMLTop(a.Path, "model_catalog_json"); ref != d.Home+"/.codex/magpie-models.json" || readFile(filepath.Join(home, ".codex", "magpie-models.json")) != catalog {
+		t.Fatalf("catalog path changed: %q", ref)
 	}
 }
 

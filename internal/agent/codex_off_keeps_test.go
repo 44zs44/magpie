@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/yetone/magpie/internal/edit"
 )
 
 // a config.toml as a Codex user of months has one: comments, a profile,
@@ -80,9 +81,9 @@ func codexOffUserLines() []string {
 // darwish4021 on Discord: switching Codex off on the Agents page lost
 // Codex's configuration. Switched on and off again, every line of the
 // user's config.toml is there, an edit made while on magpie too, the file
-// still parses, nothing of magpie's but its provider table (kept for the
-// threads started on it) is left, and a chat is back on the provider it
-// was started on. The relay cases were red: bringOver had moved the
+// still parses, magpie's routing is removed while its provider table and
+// local catalog stay, and a chat is back on the provider it was started
+// on. The relay cases were red: bringOver had moved the
 // relay's threads onto magpie, so giveTables no longer counted the
 // relay's table and forgot its base_url, leaving the user's provider
 // pointed at magpie's gateway.
@@ -110,6 +111,9 @@ func TestCodexOffKeepsUsersConfig(t *testing.T) {
 				}
 				SyncCatalog()
 				on := read()
+				catalogRef, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+				catalogPath := filepath.Join(dir, "magpie-models.json")
+				catalog := readFile(catalogPath)
 				if edited {
 					on += "\n[projects.\"/Users/me/new\"]\ntrust_level = \"trusted\"\n\n[mcp_servers.added]\ncommand = \"added\"\n"
 					os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(on), 0o644)
@@ -141,10 +145,13 @@ func TestCodexOffKeepsUsersConfig(t *testing.T) {
 				if err := toml.Unmarshal([]byte(off), &parsed); err != nil {
 					t.Errorf("left unloadable: %v", err)
 				}
-				// the provider table stays for the threads started on it;
-				// nothing else of magpie's does
+				// The provider table remains for old threads, and the local
+				// catalog remains for reconnect; routing is still removed.
+				if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != catalogRef || readFile(catalogPath) != catalog {
+					t.Error("disconnect changed the local catalog or its path")
+				}
 				for k, v := range parsed {
-					if s, ok := v.(string); ok && strings.Contains(s, "magpie") {
+					if s, ok := v.(string); ok && k != "model_catalog_json" && strings.Contains(s, "magpie") {
 						t.Errorf("magpie's %s left: %q", k, s)
 					}
 				}

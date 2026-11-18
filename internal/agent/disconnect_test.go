@@ -15,8 +15,9 @@ import (
 // Disconnect leaves Codex as it was before magpie was wired in (Fate on
 // Discord asked for one action that takes out what magpie wrote): the
 // provider, model and effort the user had come back, and magpie's base URL,
-// catalog, subagent model and the effort it set go. Picking the agent's
-// default instead leaves Codex as installed, the user's own provider gone.
+// subagent model and the effort it set go. The local catalog stays for
+// reconnect. Picking the agent's default instead leaves Codex as installed,
+// the user's own provider gone.
 func TestCodexDisconnect(t *testing.T) {
 	const own = "model_provider = \"mine\"\nmodel = \"gpt-5.4\"\nmodel_reasoning_effort = \"high\"\n\n" +
 		"[model_providers.mine]\nname = \"mine\"\nbase_url = \"https://mine.example/v1\"\n"
@@ -54,6 +55,9 @@ func TestCodexDisconnect(t *testing.T) {
 			if !cx.Wired() {
 				t.Fatalf("not wired on a magpie model:\n%s", read())
 			}
+			was["model_catalog_json"], _ = edit.GetTOMLTop(path, "model_catalog_json")
+			catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+			catalog := readFile(catalogPath)
 			if err := cx.Disconnect(); err != nil {
 				t.Fatal(err)
 			}
@@ -66,8 +70,8 @@ func TestCodexDisconnect(t *testing.T) {
 			if mine, _ := edit.GetTOMLTable(path, "model_providers.mine"); tc.config != "" && mine["base_url"] != "https://mine.example/v1" {
 				t.Fatalf("own provider table changed:\n%s", read())
 			}
-			if _, err := os.Stat(filepath.Join(home, ".codex", "magpie-models.json")); err == nil {
-				t.Error("magpie's catalog left")
+			if got := readFile(catalogPath); got == "" || got != catalog {
+				t.Error("disconnect changed or removed the local catalog")
 			}
 			if cx.Wired() || cx.Drift() != nil {
 				t.Fatalf("still wired (drift %+v):\n%s", cx.Drift(), read())

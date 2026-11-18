@@ -111,7 +111,11 @@ func TestMarkedLinesEveryAgent(t *testing.T) {
 			}
 			for p, b := range agentFiles(t, home) {
 				for _, l := range strings.Split(b, "\n") {
-					if strings.Contains(l, "# "+edit.MarkTag) && !strings.Contains(l, "Codex threads started on magpie") {
+					// A local Codex catalog stays through Disconnect, so its
+					// explanatory note stays with the reference too. Other
+					// magpie-owned notes must still be removed.
+					catalogNote := filepath.ToSlash(p) == ".codex/config.toml" && strings.Contains(b, "model_catalog_json") && strings.Contains(l, "model list for Codex")
+					if strings.Contains(l, "# "+edit.MarkTag) && !catalogNote && !strings.Contains(l, "Codex threads started on magpie") {
 						t.Errorf("%s: a note outlived Disconnect: %q", p, l)
 					}
 				}

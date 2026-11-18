@@ -134,15 +134,18 @@ func TestCodexSignedOutUsesProvider(t *testing.T) {
 		!strings.Contains(cfg, "[model_providers.magpie]") || !strings.Contains(cfg, "model_catalog_json") {
 		t.Fatalf("\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	if err := cx.Fields[0].Set(""); err != nil {
 		t.Fatal(err)
 	}
 	if cfg = read(); strings.Contains(cfg, "model =") || strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, "model_provider =") ||
-		strings.Contains(cfg, "model_catalog_json") || !strings.Contains(cfg, "[model_providers.magpie]") {
+		!strings.Contains(cfg, "[model_providers.magpie]") {
 		t.Fatalf("reset:\n%s", cfg)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "magpie-models.json")); err == nil {
-		t.Error("catalog file left")
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+		t.Fatal("reset changed the local catalog or its path")
 	}
 }
 
@@ -394,14 +397,20 @@ func TestCodexLoginAPI(t *testing.T) {
 		!strings.Contains(cfg, "[model_providers.magpie]") || !strings.Contains(cfg, "model_catalog_json") {
 		t.Fatalf("api:\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	if err := login.Set(""); err != nil {
 		t.Fatal(err)
 	}
 	cfg = read()
 	if !strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, "model_provider =") ||
-		strings.Contains(cfg, "model_catalog_json") || !strings.Contains(cfg, "[model_providers.magpie]") ||
+		!strings.Contains(cfg, "[model_providers.magpie]") ||
 		!strings.Contains(cfg, `model = "fake/m1"`) {
 		t.Fatalf("back to ChatGPT:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+		t.Fatal("back to ChatGPT changed the local catalog or its path")
 	}
 	if err := login.Set("api"); err != nil {
 		t.Fatal(err)

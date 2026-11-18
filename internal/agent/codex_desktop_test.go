@@ -148,27 +148,29 @@ func TestCodexDesktopListBesideSignIn(t *testing.T) {
 		t.Fatalf("back beside the sign-in:\n%s", cfg)
 	}
 
-	// disconnected: the key and the file go
+	// Disconnect keeps the local catalog and its reference for reconnect.
+	kept := readFile(desk)
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
 	if err := cx.Unwire(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "model_catalog_json") {
+	if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "openai_base_url") {
 		t.Fatalf("unwired:\n%s", cfg)
 	}
-	if _, err := os.Stat(desk); !os.IsNotExist(err) {
-		t.Fatalf("unwired: the app's list is still there: %v", err)
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(desk) != kept {
+		t.Fatal("unwired: the local catalog or its path changed")
 	}
 }
 
 // The CLI alone asks the gateway for its list, which follows each change
-// as it is made: no file is written for it, and one written while the
-// Codex app was installed goes once it isn't.
+// as it is made: no file is created for it. A catalog already written while
+// the Codex app was installed stays, including its local customizations.
 func TestCodexDesktopListCLIOnly(t *testing.T) {
 	home, read := codexHome(t, `{"tokens":{"access_token":"x","id_token":"x.e30.x"}}`, `model = "gpt-5.5"`+"\n")
 	desk := filepath.Join(home, ".codex", "magpie-desktop-models.json")
 	app := false
 	codexAppReads(t, &app)
-	list := `{"models":[{"slug":"gpt-6-sol"}]}`
+	list := `{"local_note":"kept","models":[{"slug":"gpt-6-sol"}]}`
 	deskListIs(t, &list)
 	cx := codex(home)
 	if ok, err := cx.Join(); err != nil || !ok {
@@ -187,15 +189,16 @@ func TestCodexDesktopListCLIOnly(t *testing.T) {
 	if cfg := read(); !strings.Contains(cfg, "magpie-desktop-models.json") {
 		t.Fatalf("the app installed:\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
 	app = false
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "model_catalog_json") {
-		t.Fatalf("the app gone:\n%s", cfg)
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref {
+		t.Fatalf("the app gone: catalog path changed to %q", got)
 	}
-	if _, err := os.Stat(desk); !os.IsNotExist(err) {
-		t.Fatalf("the app gone: the list stays: %v", err)
+	if got := readFile(desk); !strings.Contains(got, `"local_note": "kept"`) {
+		t.Fatalf("the app gone: local catalog content lost:\n%s", got)
 	}
 }
 

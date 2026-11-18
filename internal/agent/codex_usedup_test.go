@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -38,13 +39,19 @@ func TestCodexRunsOutAfterPick(t *testing.T) {
 	if cfg := read(); !strings.Contains(cfg, `model_provider = "magpie"`) {
 		t.Fatalf("used up, synced again:\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	codexUsedUp = func() bool { return false }
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") ||
+	if cfg := read(); strings.Contains(cfg, "model_provider =") ||
 		!strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model = "fake/m1"`) {
 		t.Fatalf("allowance back:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+		t.Fatal("allowance reset changed the local catalog or its path")
 	}
 
 	// magpie as the provider because the user asked for it stays so
@@ -80,12 +87,18 @@ func TestCodexKeptOnChatGPT(t *testing.T) {
 	if cfg := read(); !strings.Contains(cfg, `model_provider = "magpie"`) {
 		t.Fatalf("ChatGPT, used up: magpie its provider:\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 
 	beside := func(when string) {
 		t.Helper()
-		if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") ||
+		if cfg := read(); strings.Contains(cfg, "model_provider =") ||
 			!strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model = "fake/m1"`) {
 			t.Fatalf("%s:\n%s", when, cfg)
+		}
+		if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+			t.Fatalf("%s: local catalog or its path changed", when)
 		}
 	}
 	if err := cx.Field("login").Set("chatgpt"); err != nil {
@@ -154,13 +167,19 @@ func TestCodexOwnModelGoesThroughMagpieWhileUsedUp(t *testing.T) {
 	if cfg := read(); !strings.Contains(cfg, `model = "codex/gpt-a"`) {
 		t.Fatalf("used up, synced again:\n%s", cfg)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	codexUsedUp = func() bool { return false }
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") ||
+	if cfg := read(); strings.Contains(cfg, "model_provider =") ||
 		!strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model = "gpt-a"`) {
 		t.Fatalf("allowance back:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+		t.Fatal("allowance reset changed the local catalog or its path")
 	}
 	if cx.AppOut() || !cx.Joined() {
 		t.Fatalf("allowance back: AppOut %v, Joined %v", cx.AppOut(), cx.Joined())
@@ -304,13 +323,19 @@ func TestCodexOwnModelOneSpentAccountTakenOverForOtherModels(t *testing.T) {
 			t.Fatalf("held, synced again (%d): route changed:\n%s\nwas:\n%s", i, r, route)
 		}
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	codexUsedUp = func() bool { return false }
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(); strings.Contains(got, "model_provider =") || strings.Contains(got, "model_catalog_json") ||
+	if got := read(); strings.Contains(got, "model_provider =") ||
 		!strings.Contains(got, `model = "gpt-a"`) || !strings.Contains(got, "openai_base_url") {
 		t.Fatalf("reset:\n%s", got)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+		t.Fatal("reset changed the local catalog or its path")
 	}
 	if cx.AppOut() || !cx.Joined() {
 		t.Fatalf("reset: AppOut %v, Joined %v", cx.AppOut(), cx.Joined())
@@ -374,6 +399,9 @@ func TestCodexOwnModelOutThenKeptOnChatGPT(t *testing.T) {
 	if cx.AppOutOff() {
 		t.Fatal("taken over: the takeover reads as turned off")
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
+	catalog := readFile(catalogPath)
 	if err := cx.Field("login").Set("chatgpt"); err != nil {
 		t.Fatal(err)
 	}
@@ -384,11 +412,14 @@ func TestCodexOwnModelOutThenKeptOnChatGPT(t *testing.T) {
 	}
 	onSignIn := func(when string) {
 		t.Helper()
-		if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") || !strings.Contains(cfg, `model = "gpt-a"`) {
+		if cfg := read(); strings.Contains(cfg, "model_provider =") || !strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model = "gpt-a"`) {
 			t.Fatalf("%s:\n%s", when, cfg)
 		}
 		if cx.AppOut() {
 			t.Fatalf("%s: AppOut", when)
+		}
+		if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalog {
+			t.Fatalf("%s: local catalog or its path changed", when)
 		}
 	}
 	onSignIn("kept on ChatGPT while used up")

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/edit"
 )
 
 // On magpie API, one of Codex's own models picked as its default keeps
@@ -74,13 +76,18 @@ func TestCodexAPIKeepsMagpieOnOwnModel(t *testing.T) {
 	}
 
 	// back on ChatGPT: Codex's own model, straight to OpenAI
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
+	kept := readFile(catalogPath)
 	if err := login.Set(""); err != nil {
 		t.Fatal(err)
 	}
 	cfg := read()
 	if !strings.Contains(cfg, `model = "gpt-b"`) || strings.Contains(cfg, "model_provider =") ||
-		strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, "model_catalog_json") {
+		strings.Contains(cfg, "openai_base_url") {
 		t.Fatalf("back on ChatGPT:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != kept {
+		t.Fatal("back on ChatGPT changed the local catalog or its path")
 	}
 	if err := model.Set("gpt-a"); err != nil {
 		t.Fatal(err)

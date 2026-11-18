@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -46,14 +47,19 @@ func TestCodexKeptOnAHeldAccountShowsIt(t *testing.T) {
 			home, read := codexHome(t, `{"tokens":{"access_token":"x","id_token":"x.e30.x"}}`, c.config)
 			cx := codex(home)
 			c.setup(t, home, cx)
+			var ref, catalogBytes string
+			catalogPath := filepath.Join(home, ".codex", "magpie-models.json")
 			beside := func(when string) {
 				t.Helper()
-				if cfg := read(); strings.Contains(cfg, "model_provider =") || strings.Contains(cfg, "model_catalog_json") ||
+				if cfg := read(); strings.Contains(cfg, "model_provider =") ||
 					!strings.Contains(cfg, "openai_base_url") {
 					t.Fatalf("%s: not beside the sign-in:\n%s", when, cfg)
 				}
 				if cx.AppOut() {
 					t.Fatalf("%s: AppOut", when)
+				}
+				if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(catalogPath) != catalogBytes {
+					t.Fatalf("%s: local catalog or its path changed", when)
 				}
 			}
 
@@ -66,6 +72,8 @@ func TestCodexKeptOnAHeldAccountShowsIt(t *testing.T) {
 			if cfg := read(); !strings.Contains(cfg, `model_provider = "magpie"`) || !cx.AppOut() {
 				t.Fatalf("held, not kept: no takeover:\n%s", cfg)
 			}
+			ref, _ = edit.GetTOMLTop(cx.Path, "model_catalog_json")
+			catalogBytes = readFile(catalogPath)
 
 			// the user keeps Codex on that account: back beside its sign-in,
 			// where the app shows the account

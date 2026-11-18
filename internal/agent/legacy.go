@@ -16,7 +16,8 @@ const legacyID = "dial"
 // RenameLegacy rewrites what an older dial left in the agents' files so it
 // says magpie: a model spelled dial/… becomes magpie/… (which also writes
 // the magpie provider entry the agent needs), and then the dial entry,
-// Codex's table and catalog file, and Claude Code's token go. It runs at
+// Codex's old provider table, and Claude Code's token go. Codex's existing
+// local catalog stays at its configured path. It runs at
 // start-up; once nothing says dial any more it changes nothing. Errors are
 // swallowed on purpose — a file magpie cannot rewrite is one the user can
 // still fix from the picker.
@@ -29,9 +30,16 @@ func RenameLegacy() {
 			// Set() would stash "dial" as the provider to go back to; say
 			// magpie first so it sees a config that is already routed.
 			if v, _ := edit.GetTOMLTop(a.Path, "model_provider"); v == legacyID {
-				_ = edit.SetTOMLTop(a.Path, edit.KV{Path: "model_provider", Value: magpieID})
+				if err := edit.SetTOMLTop(a.Path, edit.KV{Path: "model_provider", Value: magpieID}); err != nil {
+					continue
+				}
 				if f := a.Field("model"); f != nil {
-					_ = f.Set(f.Get())
+					if err := f.Set(f.Get()); err != nil {
+						// A rejected catalog must keep its provider too, so a
+						// later start can retry without a half-migrated route.
+						_ = edit.SetTOMLTop(a.Path, edit.KV{Path: "model_provider", Value: legacyID})
+						continue
+					}
 				}
 			}
 		}
@@ -62,7 +70,6 @@ func RenameLegacy() {
 			if tables, err := edit.TOMLTables(a.Path); err == nil && slices.Contains(tables, "model_providers."+legacyID) {
 				_ = edit.DelTOMLTable(a.Path, "model_providers."+legacyID)
 			}
-			os.Remove(filepath.Join(a.Dir, legacyID+"-models.json"))
 		case "claude":
 			if t, _ := edit.GetJSON(a.Path, "env.ANTHROPIC_AUTH_TOKEN"); t == legacyID {
 				_ = edit.SetJSON(a.Path, edit.KV{Path: "env.ANTHROPIC_AUTH_TOKEN", Value: hereKey()})

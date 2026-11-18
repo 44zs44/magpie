@@ -73,12 +73,16 @@ func TestCodexWSLAppAddressKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// taken out, the address goes with magpie
+	// Taken out, the address goes with magpie; the relative catalog stays.
+	catalog := readFile(home + "/.codex/magpie-models.json")
 	if err := cx.Unwire(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := read(); strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, "model_catalog_json") || strings.Contains(cfg, `model_provider = "magpie"`) {
+	if cfg := read(); strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, `model_provider = "magpie"`) {
 		t.Fatalf("unwired:\n%s", cfg)
+	}
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "magpie-models.json" || readFile(home+"/.codex/magpie-models.json") != catalog {
+		t.Fatal("unwired: the relative catalog or its contents changed")
 	}
 }
 

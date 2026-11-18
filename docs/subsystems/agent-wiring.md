@@ -17,6 +17,9 @@ automatic replacements and changes between provider and ChatGPT wiring
 keep an existing catalog at its current path. Profile-only wiring follows
 the same rule in its own config. Disconnect retains existing catalogs,
 including ones whose contents still equal their initial generated values.
+The startup rename from `dial` to `magpie` follows the same rule: its old
+catalog filename and local contents remain. If applying the model fails,
+the old provider selection and table remain so the migration can retry.
 
 `writeCodexCatalog` in
 [`codex_catalog_edits.go`](../../internal/agent/codex_catalog_edits.go)

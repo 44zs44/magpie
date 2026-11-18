@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -36,12 +37,16 @@ func TestCodexAPIKeyUsesProvider(t *testing.T) {
 	if c := cx.Check(); c != "" {
 		t.Fatal(c)
 	}
+	ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json")
 	if err := cx.Fields[0].Set("gpt-5.4"); err != nil {
 		t.Fatal(err)
 	}
-	if cfg = read(); !strings.Contains(cfg, `model_provider = "relay"`) || strings.Contains(cfg, "model_catalog_json") ||
+	if cfg = read(); !strings.Contains(cfg, `model_provider = "relay"`) ||
 		strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model = "gpt-5.4"`) {
 		t.Fatalf("back:\n%s", cfg)
+	}
+	if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != ref || readFile(filepath.Join(home, ".codex", "magpie-models.json")) != string(b) {
+		t.Fatal("restoring the relay changed the local catalog or its path")
 	}
 }
 

@@ -40,7 +40,8 @@ func TestRenameLegacy(t *testing.T) {
 }
 `)
 	write(".codex/config.toml", "model_reasoning_effort = \"high\"\nmodel = \"deepseek/deepseek-flash\"\nmodel_provider = \"dial\"\nmodel_catalog_json = '"+filepath.Join(home, ".codex", "dial-models.json")+"'\n\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n\n[model_providers.dial]\nname = \"dial\"\nbase_url = \"http://127.0.0.1:3425/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"dial\"\n")
-	write(".codex/dial-models.json", "{}")
+	const localCatalog = `{"local_note":"kept","models":[{"slug":"deepseek/deepseek-flash","base_instructions":"custom instructions"}]}`
+	write(".codex/dial-models.json", localCatalog)
 	write(".pi/agent/settings.json", `{"defaultProvider": "dial", "defaultModel": "deepseek/deepseek-flash", "theme": "dark"}`)
 	write(".pi/agent/models.json", `{"providers": {"dial": {"api": "openai-completions", "apiKey": "dial", "baseUrl": "http://127.0.0.1:3425/v1", "models": []}}}`)
 	write(".claude/settings.json", `{"env": {"ANTHROPIC_BASE_URL": "`+gateway.URL()+`", "ANTHROPIC_AUTH_TOKEN": "dial", "ANTHROPIC_MODEL": "deepseek/deepseek-flash"}, "theme": "dark"}`)
@@ -62,14 +63,14 @@ func TestRenameLegacy(t *testing.T) {
 		t.Fatalf("opencode:\n%s", oc)
 	}
 	cx := read(".codex/config.toml")
-	if strings.Contains(cx, "dial") || !strings.Contains(cx, "[model_providers.magpie]") || !strings.Contains(cx, `model_provider = "magpie"`) || !strings.Contains(cx, `[projects."/x"]`) {
+	if strings.Contains(cx, "[model_providers.dial]") || !strings.Contains(cx, "[model_providers.magpie]") || !strings.Contains(cx, `model_provider = "magpie"`) || !strings.Contains(cx, `[projects."/x"]`) {
 		t.Fatalf("codex:\n%s", cx)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "dial-models.json")); err == nil {
-		t.Fatal("dial-models.json still there")
+	if ref, _ := edit.GetTOMLTop(filepath.Join(home, ".codex", "config.toml"), "model_catalog_json"); ref != filepath.Join(home, ".codex", "dial-models.json") {
+		t.Fatalf("local catalog path changed: %q", ref)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "magpie-models.json")); err != nil {
-		t.Fatal("magpie-models.json missing")
+	if catalog := read(".codex/dial-models.json"); catalog != localCatalog {
+		t.Fatalf("local catalog content lost:\n%s", catalog)
 	}
 	if b := stashLoad(); b["codex.provider"] == "dial" {
 		t.Fatal("dial stashed as the provider to go back to")
@@ -88,13 +89,29 @@ func TestRenameLegacy(t *testing.T) {
 
 	// a second run leaves every file alone
 	before := map[string]string{}
-	for _, rel := range []string{".config/opencode/opencode.jsonc", ".codex/config.toml", ".pi/agent/settings.json", ".pi/agent/models.json", ".claude/settings.json"} {
+	for _, rel := range []string{".config/opencode/opencode.jsonc", ".codex/config.toml", ".codex/dial-models.json", ".pi/agent/settings.json", ".pi/agent/models.json", ".claude/settings.json"} {
 		before[rel] = read(rel)
 	}
 	RenameLegacy()
 	for rel, b := range before {
 		if read(rel) != b {
 			t.Fatalf("%s changed on the second run", rel)
+		}
+	}
+}
+
+func TestRenameLegacyKeepsInvalidCodexCatalog(t *testing.T) {
+	const config = "model = \"fake/m1\"\nmodel_provider = \"dial\"\nmodel_catalog_json = \"dial-models.json\"\n\n[model_providers.dial]\nname = \"dial\"\nbase_url = \"http://127.0.0.1:3425/v1\"\nwire_api = \"responses\"\n"
+	home, read := codexHome(t, "", config)
+	path := filepath.Join(home, ".codex", "dial-models.json")
+	writeFile(t, path, "{}")
+	for range 2 {
+		RenameLegacy()
+		if got := read(); got != config {
+			t.Fatalf("a failed migration changed the provider config:\n%s", got)
+		}
+		if got := readFile(path); got != "{}" {
+			t.Fatalf("a failed migration changed or removed the catalog: %q", got)
 		}
 	}
 }
