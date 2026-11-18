@@ -98,8 +98,9 @@ func TestCodexCatalogKeepsWhatTheUserAdded(t *testing.T) {
 	has("after stepping out and back")
 }
 
-// A list holding nothing of the user's still goes as magpie steps out.
-func TestCodexCatalogRemovedWhenNothingAdded(t *testing.T) {
+// An existing catalog remains the source on reconnect, even when no one
+// edited the initial generated values.
+func TestCodexCatalogKeepsUneditedListWhenSteppingOut(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	list := filepath.Join(home, ".codex", "magpie-models.json")
 	cx := codex(home)
@@ -109,11 +110,23 @@ func TestCodexCatalogRemovedWhenNothingAdded(t *testing.T) {
 	if _, err := os.Stat(list); err != nil {
 		t.Fatal(err)
 	}
+	before := readFile(list)
 	if err := cx.Fields[0].Set(""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(list); err == nil {
-		t.Error("magpie's list stayed after it stepped out")
+	if got := readFile(list); got != before {
+		t.Fatal("stepping out discarded the existing catalog")
+	}
+	s := settings.Load()
+	s.ModelCodexInstructions = map[string]string{"fake/m1": "new default while disconnected"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := cx.Fields[0].Set("fake/m1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(list); got != before {
+		t.Fatal("reconnecting initialized an existing model again")
 	}
 }
 
@@ -183,7 +196,7 @@ func TestCodexCatalogKeepsOwnedEditsLocally(t *testing.T) {
 	}
 }
 
-func TestCodexCatalogMagpieChangeWinsAndBrokenFileIsKept(t *testing.T) {
+func TestCodexCatalogLocalInstructionsWinAndBrokenFileIsKept(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	path := filepath.Join(home, ".codex", "magpie-models.json")
 	cx := codex(home)
@@ -194,6 +207,12 @@ func TestCodexCatalogMagpieChangeWinsAndBrokenFileIsKept(t *testing.T) {
 	json.Unmarshal([]byte(readFile(path)), &cat)
 	m := cat["models"].([]any)[0].(map[string]any)
 	m["base_instructions"] = "file choice"
+	m["model_messages"] = map[string]any{
+		"instructions_template":   "local template",
+		"instructions_variables":  map[string]any{"personality": "local personality"},
+		"persistent_instructions": "local persistent instructions",
+	}
+	wantMessages, _ := json.Marshal(m["model_messages"])
 	b, _ := json.Marshal(cat)
 	writeFile(t, path, string(b))
 	s := settings.Load()
@@ -204,8 +223,9 @@ func TestCodexCatalogMagpieChangeWinsAndBrokenFileIsKept(t *testing.T) {
 	if err := cx.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(readFile(path), "settings choice") || strings.Contains(readFile(path), "file choice") {
-		t.Fatal("an explicit Magpie change did not replace the local value")
+	_, _, models, err := codexCatalogRead([]byte(readFile(path)))
+	if err != nil || string(models["fake/m1"]["base_instructions"]) != `"file choice"` || codexFieldHash(models["fake/m1"]["model_messages"]) != codexFieldHash(wantMessages) {
+		t.Fatal("a settings prompt replaced the local instructions or messages")
 	}
 	// Explicit import can still choose the file's value instead.
 	writeFile(t, path, string(b))
@@ -257,7 +277,7 @@ func TestCodexCatalogDesktopAndProfileEdits(t *testing.T) {
 			home, _ := codexHome(t, "", "")
 			path := filepath.Join(home, ".codex", name)
 			build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-			if err := writeCodexCatalog(path, build, name == "magpie-models.json"); err != nil {
+			if err := writeCodexCatalog(path, build, name == "magpie-models.json", codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
 			var cat map[string]any
@@ -265,7 +285,7 @@ func TestCodexCatalogDesktopAndProfileEdits(t *testing.T) {
 			cat["models"].([]any)[0].(map[string]any)["base_instructions"] = "both modes"
 			b, _ := json.Marshal(cat)
 			writeFile(t, path, string(b))
-			if err := writeCodexCatalog(path, build, name == "magpie-models.json"); err != nil {
+			if err := writeCodexCatalog(path, build, name == "magpie-models.json", codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(readFile(path), "both modes") || settings.Load().ModelCodexInstructions["fake/m1"] != "" {
@@ -331,7 +351,7 @@ func TestCodexCatalogConcurrentSaveIsKept(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	path := filepath.Join(home, ".codex", "magpie-models.json")
 	build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 		t.Fatal(err)
 	}
 	baseline := readFile(codexBaselinePath(path))
@@ -341,7 +361,7 @@ func TestCodexCatalogConcurrentSaveIsKept(t *testing.T) {
 		return writeCodexCatalog(path, func() ([]byte, error) {
 			writeFile(t, path, newer)
 			return build()
-		}, true)
+		}, true, codexcat.NewSessionEffort())
 	}}, filepath.Join(home, ".codex", "config.toml"))
 	if err := a.Sync(); err == nil || !strings.Contains(err.Error(), "changed while syncing") {
 		t.Fatalf("concurrent save: %v", err)
@@ -413,7 +433,7 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 			}
 			generated := `{"metadata":{"vendor":1,"removed":10},"models":[{"slug":"fake/a","priority":1,"base_instructions":"default prompt","context_window":272000,"model_messages":{"instructions_template":"default template","variables":{"managed":"old","removed":10}},"deleted_later":{"managed":1},"null_later":{"managed":1}}, {"slug":"fake/b","priority":2}]}`
 			build := func() ([]byte, error) { return []byte(generated), nil }
-			if err := writeCodexCatalog(path, build, false); err != nil {
+			if err := writeCodexCatalog(path, build, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			if readFile(path) != local {
@@ -426,7 +446,7 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 			// Adding a source model shifts priorities without changing the
 			// relative source order of the surviving models.
 			generated = strings.Replace(generated, `"models":[`, `"models":[{"slug":"fake/c","priority":0},`, 1)
-			if err := writeCodexCatalog(path, build, false); err != nil {
+			if err := writeCodexCatalog(path, build, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			_, order, models, err := codexCatalogRead([]byte(readFile(path)))
@@ -434,7 +454,7 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 				t.Fatalf("addition changed local order/priorities: %v %v", order, models)
 			}
 			generated = `{"metadata":{"vendor":2},"models":[{"slug":"fake/c","priority":0},{"slug":"fake/a","priority":1,"base_instructions":"default prompt","context_window":512000,"model_messages":{"instructions_template":"default template","variables":{"managed":"new"}},"null_later":null}]}`
-			if err := writeCodexCatalog(path, build, false); err != nil {
+			if err := writeCodexCatalog(path, build, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			top, order, models, err := codexCatalogRead([]byte(readFile(path)))
@@ -442,8 +462,8 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 				t.Fatalf("source removal lost custom entries/order: %v", order)
 			}
 			m := models["fake/a"]
-			if string(m["base_instructions"]) != `"local prompt"` || string(m["context_window"]) != "512000" || string(m["null_later"]) != "null" || string(m["local_flag"]) != "false" {
-				t.Fatalf("field merge: %s", readFile(path))
+			if string(m["base_instructions"]) != `"local prompt"` || string(m["context_window"]) != "123000" || codexFieldHash(m["null_later"]) != codexFieldHash(json.RawMessage(`{"extra":3}`)) || string(m["local_flag"]) != "false" {
+				t.Fatalf("source refresh changed local fields: %s", readFile(path))
 			}
 			var messages struct {
 				Template  string                     `json:"instructions_template"`
@@ -453,8 +473,8 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 			var metadata, deleted map[string]json.RawMessage
 			json.Unmarshal(top["metadata"], &metadata)
 			json.Unmarshal(m["deleted_later"], &deleted)
-			if messages.Template != "local template" || string(messages.Variables["managed"]) != `"new"` || messages.Variables["removed"] != nil || string(messages.Variables["extra"]) != "null" || len(deleted) != 1 || string(deleted["extra"]) != "2" || metadata["removed"] != nil || string(metadata["local"]) != "true" || top["custom"] == nil {
-				t.Fatalf("nested customization/deletion merge: %s", readFile(path))
+			if messages.Template != "local template" || string(messages.Variables["managed"]) != `"local"` || string(messages.Variables["removed"]) != "10" || string(messages.Variables["extra"]) != "null" || len(deleted) != 2 || string(deleted["managed"]) != "1" || string(deleted["extra"]) != "2" || string(metadata["vendor"]) != "1" || string(metadata["removed"]) != "10" || string(metadata["local"]) != "true" || top["custom"] == nil {
+				t.Fatalf("source refresh changed local nested objects: %s", readFile(path))
 			}
 			if !codexCatalogPending(path) {
 				t.Fatal("disconnect would remove customized JSON")
@@ -463,13 +483,71 @@ func TestCodexCatalogAdoptsLocalJSONAndMergesSourceChanges(t *testing.T) {
 	}
 }
 
-func TestCodexCatalogReordersOnlyWhenSourceOrderChanges(t *testing.T) {
+func TestCodexCatalogKeepsLocalInstructionShapeAcrossSourceChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  string
+	}{
+		{"base-only", `{"slug":"fake/m1","priority":7,"base_instructions":"local base"}`},
+		{"template-only", `{"slug":"fake/m1","priority":7,"model_messages":{"instructions_template":"local template"}}`},
+		{"full-messages", `{"slug":"fake/m1","priority":7,"base_instructions":"local base","model_messages":{"instructions_template":"local template","instructions_variables":{"personality":"local personality"},"persistent_instructions":"local persistent instructions"}}`},
+		{"deleted-template", `{"slug":"fake/m1","priority":7,"base_instructions":"local base","model_messages":{"instructions_variables":{"personality":"local personality"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, _ := codexHome(t, "", "")
+			path := filepath.Join(home, ".codex", "custom-models.json")
+			writeFile(t, path, `{"models":[`+tc.row+`]}`)
+			generated := ""
+			build := func() ([]byte, error) { return []byte(generated), nil }
+			check := func() {
+				t.Helper()
+				if err := writeCodexCatalog(path, build, false, ""); err != nil {
+					t.Fatal(err)
+				}
+				_, _, models, err := codexCatalogRead([]byte(readFile(path)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := json.Marshal(models["fake/m1"])
+				if err != nil || codexFieldHash(got) != codexFieldHash(json.RawMessage(tc.row)) {
+					t.Fatalf("existing local row changed: %s", got)
+				}
+				if string(models["fake/new"]["base_instructions"]) != `"initial instructions for new model"` {
+					t.Fatal("new model did not receive its initial instructions")
+				}
+			}
+			for _, source := range []string{
+				`"base_instructions":"first source base"`,
+				`"base_instructions":"updated source base","shell_type":"unified_exec"`,
+				`"base_instructions":"updated source base","model_messages":{"instructions_template":"first source template","persistent_instructions":"first source persistent"}`,
+				`"base_instructions":"updated source base","model_messages":{"instructions_template":"updated source template","persistent_instructions":"updated source persistent"}`,
+				`"model_messages":{"instructions_template":"template without base"}`,
+				`"shell_type":"shell_command"`,
+			} {
+				generated = `{"models":[{"slug":"fake/m1","priority":1,` + source + `},{"slug":"fake/new","priority":2,"base_instructions":"initial instructions for new model"}]}`
+				check()
+			}
+			// A configured prompt changes the generated default, but it must
+			// neither replace local messages nor restore a deleted base field.
+			s := settings.Load()
+			s.ModelCodexInstructions = map[string]string{"fake/m1": "settings prompt"}
+			if err := settings.Save(s); err != nil {
+				t.Fatal(err)
+			}
+			generated = `{"models":[{"slug":"fake/m1","priority":1,"base_instructions":"settings prompt"},{"slug":"fake/new","priority":2,"base_instructions":"initial instructions for new model"}]}`
+			check()
+			check()
+		})
+	}
+}
+
+func TestCodexCatalogReordersOnlyWhenExplicitOrderChanges(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	path := filepath.Join(home, ".codex", "custom-models.json")
 	writeFile(t, path, `{"models":[{"slug":"fake/b","priority":1},{"slug":"manual/only","priority":2},{"slug":"fake/a","priority":3}]}`)
 	generated := `{"models":[{"slug":"fake/a","priority":1},{"slug":"fake/b","priority":2}]}`
 	build := func() ([]byte, error) { return []byte(generated), nil }
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	// An explicit Magpie order equal to its existing generated order
@@ -479,7 +557,7 @@ func TestCodexCatalogReordersOnlyWhenSourceOrderChanges(t *testing.T) {
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, order, models, err := codexCatalogRead([]byte(readFile(path)))
@@ -493,17 +571,15 @@ func TestCodexCatalogReordersOnlyWhenSourceOrderChanges(t *testing.T) {
 			t.Fatalf("%s has priority %d at %d", slug, priority, i)
 		}
 	}
-	// Native catalogs can reorder by priority without moving array rows.
-	// A local-only row also keeps its effective slot when its priority
-	// differs from its position in the array.
-	writeFile(t, path, `{"models":[{"slug":"fake/a","priority":2},{"slug":"manual/only","priority":1},{"slug":"fake/b","priority":3}]}`)
+	// A source priority change does not undo local array order or priorities.
+	local := `{"models":[{"slug":"fake/a","priority":2},{"slug":"manual/only","priority":1},{"slug":"fake/b","priority":3}]}`
+	writeFile(t, path, local)
 	generated = `{"models":[{"slug":"fake/a","priority":2},{"slug":"fake/b","priority":1}]}`
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	_, order, _, err = codexCatalogRead([]byte(readFile(path)))
-	if err != nil || !slices.Equal(order, []string{"manual/only", "fake/b", "fake/a"}) {
-		t.Fatalf("source priority order: %v", order)
+	if got := readFile(path); got != local {
+		t.Fatalf("source priority change replaced local order: %s", got)
 	}
 }
 
@@ -514,7 +590,7 @@ func TestCodexCatalogExplicitDefaultOverridesLocalValue(t *testing.T) {
 	build := func() ([]byte, error) {
 		return []byte(`{"models":[{"slug":"fake/m1","context_window":272000,"auto_compact_token_limit":272000}]}`), nil
 	}
-	if err := writeCodexCatalog(path, build, false); err != nil {
+	if err := writeCodexCatalog(path, build, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, _, _ := provider.Resolve("fake/m1")
@@ -522,13 +598,184 @@ func TestCodexCatalogExplicitDefaultOverridesLocalValue(t *testing.T) {
 	if err := provider.Save(p); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexCatalog(path, build, false); err != nil {
+	if err := writeCodexCatalog(path, build, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, _, models, err := codexCatalogRead([]byte(readFile(path)))
 	if err != nil || string(models["fake/m1"]["context_window"]) != "272000" || string(models["fake/m1"]["auto_compact_token_limit"]) != "91000" || string(models["fake/m1"]["custom"]) != "true" {
 		t.Fatalf("explicit default changed unrelated customization: %s", readFile(path))
 	}
+}
+
+func TestCodexCatalogExplicitCapabilitiesKeepLocalInstructions(t *testing.T) {
+	home, _ := codexHome(t, "", "")
+	path := filepath.Join(home, ".codex", "custom-models.json")
+	messages := json.RawMessage(`{"instructions_template":"local template","persistent_instructions":"local persistent","instructions_variables":{"personality":"local"}}`)
+	writeFile(t, path, `{"models":[{"slug":"fake/m1","display_name":"local name","base_instructions":"local base","model_messages":`+string(messages)+`,"context_window":123000,"auto_compact_token_limit":91000,"input_modalities":["text"],"supported_reasoning_levels":[{"effort":"high","description":"local high"}],"default_reasoning_level":"high"}]}`)
+	build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := provider.Find("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetContext(*p, "m1", 256000); err != nil {
+		t.Fatal(err)
+	}
+	s := settings.Load()
+	s.ModelCompacts = map[string]int{"fake/m1": 128000}
+	s.ModelEfforts = map[string][]string{"fake/m1": {"low"}}
+	s.ModelImages = map[string]bool{"fake/m1": true}
+	s.ModelNames = map[string]string{"fake/m1": "configured model"}
+	s.ModelCodexInstructions = map[string]string{"fake/m1": "settings prompt"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, models, err := codexCatalogRead([]byte(readFile(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := models["fake/m1"]
+	if string(m["base_instructions"]) != `"local base"` || codexFieldHash(m["model_messages"]) != codexFieldHash(messages) {
+		t.Fatal("capability or prompt settings replaced local instructions")
+	}
+	if string(m["context_window"]) != "256000" || string(m["auto_compact_token_limit"]) != "128000" || !strings.Contains(string(m["display_name"]), "configured model") {
+		t.Fatalf("explicit capability settings did not apply: %s", readFile(path))
+	}
+	var modalities []string
+	if json.Unmarshal(m["input_modalities"], &modalities) != nil || !slices.Equal(modalities, []string{"text", "image"}) {
+		t.Fatalf("explicit image setting did not apply: %s", m["input_modalities"])
+	}
+	var levels []struct{ Effort string }
+	if json.Unmarshal(m["supported_reasoning_levels"], &levels) != nil || len(levels) == 0 || levels[0].Effort != "low" || string(m["default_reasoning_level"]) != `"low"` {
+		t.Fatalf("explicit reasoning selection/default did not apply: %s / %s", m["supported_reasoning_levels"], m["default_reasoning_level"])
+	}
+}
+
+func TestCodexCatalogNewControlBaselinesPreserveLocalValues(t *testing.T) {
+	home, _ := codexHome(t, "", "")
+	path := filepath.Join(home, ".codex", "custom-models.json")
+	row := `{"slug":"fake/m1","priority":7,"display_name":"local name","default_reasoning_level":"low","auto_review_model_override":"local/review","multi_agent_version":"v2","context_window":123000,"input_modalities":["text"],"supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"base_instructions":"local base","model_messages":{"instructions_template":"local template","persistent_instructions":"local persistent"}}`
+	writeFile(t, path, `{"models":[`+row+`]}`)
+	var want map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(row), &want); err != nil {
+		t.Fatal(err)
+	}
+	effort := ""
+	generated := map[string]any{
+		"slug": "fake/m1", "priority": 1, "display_name": "source name · source",
+		"default_reasoning_level": "high", "auto_review_model_override": "source/review",
+		"multi_agent_version": "v1", "context_window": 200000,
+		"input_modalities":           []string{"text", "image"},
+		"supported_reasoning_levels": []map[string]string{{"effort": "low"}, {"effort": "high"}},
+		"base_instructions":          "source base", "model_messages": map[string]any{"instructions_template": "source template"},
+	}
+	build := func() ([]byte, error) { return json.Marshal(map[string]any{"models": []any{generated}}) }
+	check := func() {
+		t.Helper()
+		if err := writeCodexCatalog(path, build, true, effort); err != nil {
+			t.Fatal(err)
+		}
+		_, _, models, err := codexCatalogRead([]byte(readFile(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := json.Marshal(models["fake/m1"])
+		expected, _ := json.Marshal(want)
+		if codexFieldHash(got) != codexFieldHash(expected) {
+			t.Fatalf("control change affected other local fields: got %s, want %s", got, expected)
+		}
+	}
+	check()
+	var legacy codexCatalogBaseline
+	if err := json.Unmarshal([]byte(readFile(codexBaselinePath(path))), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"default_reasoning_level", "auto_review_model_override", "multi_agent_version", "name_suffix", "context_cap", "vision"} {
+		delete(legacy.Models["fake/m1"].Settings, field)
+	}
+	b, _ := json.Marshal(legacy)
+	writeFile(t, codexBaselinePath(path), string(b))
+	// Older baselines cannot distinguish an existing preference from a
+	// fresh UI edit. Learn each control first without rewriting local JSON.
+	check()
+	check()
+
+	// Selecting the generated default still replaces a different local
+	// default, even though the generated JSON itself has not changed.
+	effort = "high"
+	want["default_reasoning_level"] = json.RawMessage(`"high"`)
+	check()
+	// An upstream's new levels do not replace the local selection. A UI
+	// default outside that selection uses the nearest local level.
+	effort = "xhigh"
+	generated["default_reasoning_level"] = "xhigh"
+	generated["supported_reasoning_levels"] = []map[string]string{{"effort": "xhigh"}, {"effort": "max"}}
+	check()
+	s := settings.Load()
+	s.CodexAutoReview = "fake/m1"
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	generated["auto_review_model_override"] = "fake/m1"
+	want["auto_review_model_override"] = json.RawMessage(`"fake/m1"`)
+	check()
+	s = settings.Load()
+	s.CodexAgentsV1 = true
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	want["multi_agent_version"] = json.RawMessage(`"v1"`)
+	check()
+	if err := provider.SetAgentSuffix("codex", provider.SuffixOff); err != nil {
+		t.Fatal(err)
+	}
+	generated["display_name"] = "source name"
+	want["display_name"] = json.RawMessage(`"source name"`)
+	check()
+	s = settings.Load()
+	s.ModelNames = map[string]string{"fake/m1": "chosen name"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	generated["display_name"] = "chosen name"
+	want["display_name"] = json.RawMessage(`"chosen name"`)
+	check()
+	s = settings.Load()
+	s.ContextCap = 180000
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	generated["context_window"] = 180000
+	want["context_window"] = json.RawMessage(`180000`)
+	check()
+	if err := provider.ApplyCodexModelEdits(map[string]map[string]json.RawMessage{"fake/m1": {"context_window": json.RawMessage(`256000`)}}); err != nil {
+		t.Fatal(err)
+	}
+	generated["context_window"] = 256000
+	want["context_window"] = json.RawMessage(`256000`)
+	check()
+	s = settings.Load()
+	s.ContextCapAll = true
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	generated["context_window"] = 180000
+	want["context_window"] = json.RawMessage(`180000`)
+	check()
+	s = settings.Load()
+	s.Vision = "fake/m1"
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	want["input_modalities"] = json.RawMessage(`["text","image"]`)
+	check()
 }
 
 func TestCodexCatalogNativeAliasKeepsCustomization(t *testing.T) {
@@ -543,7 +790,7 @@ func TestCodexCatalogNativeAliasKeepsCustomization(t *testing.T) {
 			prompt = "provider default prompt"
 		}
 		generated = `{"models":[{"slug":"` + slug + `","priority":1,"base_instructions":"` + prompt + `"}]}`
-		if err := writeCodexCatalog(path, build, i == 1); err != nil {
+		if err := writeCodexCatalog(path, build, i == 1, ""); err != nil {
 			t.Fatal(err)
 		}
 		_, order, models, err := codexCatalogRead([]byte(readFile(path)))
@@ -560,7 +807,7 @@ func TestCodexCatalogBaselineFailureKeepsConcurrentSave(t *testing.T) {
 			path := filepath.Join(home, ".codex", "custom-models.json")
 			generated := `{"models":[{"slug":"fake/m1","base_instructions":"old generated"}]}`
 			build := func() ([]byte, error) { return []byte(generated), nil }
-			if err := writeCodexCatalog(path, build, false); err != nil {
+			if err := writeCodexCatalog(path, build, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			before := readFile(path)
@@ -583,7 +830,7 @@ func TestCodexCatalogBaselineFailureKeepsConcurrentSave(t *testing.T) {
 					writeFile(t, filepath.Join(baseline, "keep"), "force rename failure")
 				}
 				return data
-			}, func() error { return writeCodexCatalog(path, build, false) })
+			}, func() error { return writeCodexCatalog(path, build, false, "") })
 			if err == nil {
 				t.Fatal("baseline failure was ignored")
 			}
@@ -610,14 +857,32 @@ func TestCodexCatalogGlobalDisableAndRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := filepath.Join(home, ".codex", "custom-models.json")
+			messages := json.RawMessage(`{"instructions_template":"local template","instructions_variables":{"personality":"local"},"persistent_instructions":"local persistent"}`)
 			writeFile(t, path, `{"custom":"top","models":[
-				{"slug":"fake/m1","priority":30,"base_instructions":"local instruction","context_window":123000,"local":{"keep":null}},
+				{"slug":"fake/m1","priority":30,"base_instructions":"local instruction","model_messages":`+string(messages)+`,"context_window":123000,"local":{"keep":null}},
 				{"slug":"manual/only","priority":20,"custom":true},
 				{"slug":"other/m1","priority":10} ]}`)
-			build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
+			sourceMessagesChanged := false
+			build := func() ([]byte, error) {
+				b := codexcat.Catalog(magpieModels("codex"))
+				if !sourceMessagesChanged {
+					return b, nil
+				}
+				var generated map[string]any
+				if err := json.Unmarshal(b, &generated); err != nil {
+					return nil, err
+				}
+				for _, value := range generated["models"].([]any) {
+					m := value.(map[string]any)
+					if m["slug"] == "fake/m1" {
+						m["model_messages"] = map[string]any{"instructions_template": "new source template", "persistent_instructions": "new source persistent"}
+					}
+				}
+				return json.Marshal(generated)
+			}
 			sync := func() {
 				t.Helper()
-				if err := writeCodexCatalog(path, build, true); err != nil {
+				if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -663,6 +928,15 @@ func TestCodexCatalogGlobalDisableAndRestore(t *testing.T) {
 			if err := provider.SetContext(*p, "m1", 256000); err != nil {
 				t.Fatal(err)
 			}
+			// While the model is absent, both its source messages and the
+			// configured prompt change. Only the explicit context edit applies
+			// to the local row when it returns.
+			sourceMessagesChanged = true
+			s := settings.Load()
+			s.ModelCodexInstructions = map[string]string{"fake/m1": "settings prompt while inactive"}
+			if err := settings.Save(s); err != nil {
+				t.Fatal(err)
+			}
 			switch action {
 			case "delete", "disabled":
 				if _, err := provider.EnableModels("fake/m1"); err != nil {
@@ -690,8 +964,8 @@ func TestCodexCatalogGlobalDisableAndRestore(t *testing.T) {
 				t.Fatalf("restored order: %v (%v)", order, err)
 			}
 			m := models["fake/m1"]
-			if string(m["base_instructions"]) != `"local instruction"` || string(m["context_window"]) != "256000" || codexFieldHash(m["local"]) != codexFieldHash(json.RawMessage(`{"keep":null}`)) || string(top["custom"]) != `"top"` {
-				t.Fatalf("restore lost local data or ignored a parameter changed while inactive: %s %s %s", m["base_instructions"], m["context_window"], m["local"])
+			if string(m["base_instructions"]) != `"local instruction"` || codexFieldHash(m["model_messages"]) != codexFieldHash(messages) || string(m["context_window"]) != "256000" || codexFieldHash(m["local"]) != codexFieldHash(json.RawMessage(`{"keep":null}`)) || string(top["custom"]) != `"top"` {
+				t.Fatalf("restore lost local data or ignored a parameter changed while inactive: %s %s %s %s", m["base_instructions"], m["model_messages"], m["context_window"], m["local"])
 			}
 			if _, disabled := provider.IDDisabled("fake/m1"); disabled {
 				t.Fatal("restored model was disabled again")
@@ -709,7 +983,7 @@ func TestCodexCatalogReasoningReflectsInProvider(t *testing.T) {
 			}
 			path := filepath.Join(home, ".codex", "custom-models.json")
 			build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-			if err := writeCodexCatalog(path, build, true); err != nil {
+			if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
 			top, _, models, err := codexCatalogRead([]byte(readFile(path)))
@@ -725,10 +999,10 @@ func TestCodexCatalogReasoningReflectsInProvider(t *testing.T) {
 			was := catalog.Changed
 			catalog.Changed = SyncCatalog
 			t.Cleanup(func() { catalog.Changed = was })
-			if err := writeCodexCatalog(path, build, true); err != nil {
+			if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeCodexCatalog(path, build, true); err != nil {
+			if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
 			p, err := provider.Find("fake")
@@ -763,7 +1037,7 @@ func TestCodexCatalogReasoningReflectsInProvider(t *testing.T) {
 			if err := provider.SetModelEfforts("fake/m1", []string{"medium"}); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeCodexCatalog(path, build, true); err != nil {
+			if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 				t.Fatal(err)
 			}
 			p, _ = provider.Find("fake")
@@ -783,13 +1057,13 @@ func TestCodexCatalogInvalidReasoningDoesNotDisable(t *testing.T) {
 	}
 	path := filepath.Join(home, ".codex", "custom-models.json")
 	build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 		t.Fatal(err)
 	}
 	before := readFile(codexBaselinePath(path))
 	edited := `{"models":[{"slug":"fake/m2","supported_reasoning_levels":[{"effort":"not-a-level"}]}]}`
 	writeFile(t, path, edited)
-	if err := writeCodexCatalog(path, build, true); err == nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err == nil {
 		t.Fatal("invalid reasoning accepted")
 	}
 	if _, disabled := provider.IDDisabled("fake/m1"); disabled {
@@ -809,7 +1083,7 @@ func TestCodexCatalogV2AdoptionDoesNotInferGlobalEdits(t *testing.T) {
 	}
 	path := filepath.Join(home, ".codex", "custom-models.json")
 	build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 		t.Fatal(err)
 	}
 	var legacy map[string]json.RawMessage
@@ -824,7 +1098,7 @@ func TestCodexCatalogV2AdoptionDoesNotInferGlobalEdits(t *testing.T) {
 	writeFile(t, codexBaselinePath(path), string(b))
 	writeFile(t, path, `{"models":[{"slug":"fake/m2","supported_reasoning_levels":[{"effort":"high"}],"custom":"keep"}]}`)
 	for range 2 {
-		if err := writeCodexCatalog(path, build, true); err != nil {
+		if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -845,13 +1119,13 @@ func TestCodexCatalogArchivedCustomizationKeepsFile(t *testing.T) {
 	path := filepath.Join(home, ".codex", "magpie-models.json")
 	writeFile(t, path, `{"models":[{"slug":"fake/m1","base_instructions":"keep when disabled"}]}`)
 	build := func() ([]byte, error) { return codexcat.Catalog(magpieModels("codex")), nil }
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 		t.Fatal(err)
 	}
 	if err := provider.DisableModels("fake/m1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCodexCatalog(path, build, true); err != nil {
+	if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 		t.Fatal(err)
 	}
 	if !codexCatalogPending(path) {
@@ -862,8 +1136,7 @@ func TestCodexCatalogArchivedCustomizationKeepsFile(t *testing.T) {
 // An imported high-only selection stays after a source sync that rewords its
 // reasoning descriptions only: generation adds a synthetic Ultra for such a
 // model, and the exact local selection is what comes back, default level
-// included. A real upstream effort change, or a Magpie setting change, still
-// applies as before.
+// included. An explicit Magpie setting change still applies.
 func TestCodexCatalogKeepsImportedLevelsWhenSourceRewordsThem(t *testing.T) {
 	home, _ := codexHome(t, "", "")
 	path := filepath.Join(home, ".codex", "custom-models.json")
@@ -891,7 +1164,7 @@ func TestCodexCatalogKeepsImportedLevelsWhenSourceRewordsThem(t *testing.T) {
 	}
 	sync := func() {
 		t.Helper()
-		if err := writeCodexCatalog(path, build, true); err != nil {
+		if err := writeCodexCatalog(path, build, true, codexcat.NewSessionEffort()); err != nil {
 			t.Fatal(err)
 		}
 	}

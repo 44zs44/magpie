@@ -13,7 +13,10 @@ import (
 )
 
 func TestCodexProfileCatalogKeepsInstructionsLocally(t *testing.T) {
-	home, read := codexHome(t, "", "")
+	home, read := codexHome(t, "", "model_reasoning_effort = \"low\"\n")
+	if err := provider.SetModelEfforts("fake/m1", []string{"low", "high"}); err != nil {
+		t.Fatal(err)
+	}
 	cx := codex(home)
 	if err := cx.Field("scope").Set("profile"); err != nil {
 		t.Fatal(err)
@@ -26,7 +29,9 @@ func TestCodexProfileCatalogKeepsInstructionsLocally(t *testing.T) {
 	path := filepath.Join(home, ".codex", "magpie-models.json")
 	var cat map[string]any
 	json.Unmarshal([]byte(readFile(path)), &cat)
-	cat["models"].([]any)[0].(map[string]any)["base_instructions"] = "profile instructions"
+	m := cat["models"].([]any)[0].(map[string]any)
+	m["base_instructions"] = "profile instructions"
+	m["default_reasoning_level"] = "low"
 	b, _ := json.Marshal(cat)
 	writeFile(t, path, string(b))
 	if err := codex(home).Sync(); err != nil {
@@ -34,6 +39,15 @@ func TestCodexProfileCatalogKeepsInstructionsLocally(t *testing.T) {
 	}
 	if settings.Load().ModelCodexInstructions["fake/m1"] != "" || !strings.Contains(readFile(path), "profile instructions") {
 		t.Fatal("profile edit was lost or written back into provider settings")
+	}
+	// The profile's effort drives its catalog even when the main config
+	// chooses a different default for plain Codex.
+	if err := codex(home).Field("effort").Set("high"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, models, err := codexCatalogRead([]byte(readFile(path)))
+	if err != nil || string(models["fake/m1"]["default_reasoning_level"]) != `"high"` || string(models["fake/m1"]["base_instructions"]) != `"profile instructions"` {
+		t.Fatal("profile effort used the main config or replaced local instructions")
 	}
 	if read() != original {
 		t.Fatal("profile import changed main Codex config")
@@ -86,14 +100,16 @@ func TestCodexProfileOnlyLeavesConfigTomlAlone(t *testing.T) {
 	if err := cx.Field("scope").Set(""); err == nil {
 		t.Fatal("scope changed while connected")
 	}
+	list := filepath.Join(dir, "magpie-models.json")
+	before := readFile(list)
 	if err := cx.Disconnect(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(cx.Path); !os.IsNotExist(err) {
-		t.Fatalf("profile left: %v", err)
+	if ref, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); ref != "magpie-models.json" {
+		t.Fatalf("profile lost the catalog reference: %q", ref)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "magpie-models.json")); !os.IsNotExist(err) {
-		t.Fatalf("catalog left: %v", err)
+	if readFile(list) != before {
+		t.Fatal("disconnect changed the existing catalog")
 	}
 	if read() != own || codex(home).Wired() {
 		t.Fatalf("after disconnect:\n%s", read())

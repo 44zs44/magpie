@@ -141,9 +141,9 @@ func codexProfileIn(at place) *Agent {
 		if err != nil {
 			return err
 		}
-		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true)
+		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true, get("model_reasoning_effort"))
 	}
-	// the list goes with the profile, unless the user added to it
+	// Existing catalogs outlive the profile's connection and keep their prompts.
 	dropList := func() {
 		if codexCatalogPending(catalogPath) {
 			return
@@ -179,7 +179,7 @@ func codexProfileIn(at place) *Agent {
 			edit.KV{Path: "model", Value: model},
 		)
 	}
-	// A customized catalog keeps its reference for the next connection.
+	// An existing catalog keeps its reference for the next connection.
 	drop := func() error {
 		file, err := listPath()
 		if get("model_catalog_json") != "" && (err != nil || filepath.Clean(file) != filepath.Clean(catalogPath) || codexCatalogPending(file)) {

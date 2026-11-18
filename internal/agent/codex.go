@@ -311,7 +311,7 @@ func codexIn(at place) *Agent {
 				return err
 			}
 		}
-		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true)
+		return writeCodexCatalog(file, func() ([]byte, error) { return list(), nil }, true, get("model_reasoning_effort"))
 	}
 	// listGone: magpie's list is known not to be there; one that can't be
 	// looked at is not taken for gone
@@ -341,9 +341,8 @@ func codexIn(at place) *Agent {
 		_, err := os.Stat(c)
 		return errors.Is(err, fs.ErrNotExist)
 	}
-	// dropList takes the list away as magpie steps out as Codex's
-	// provider; one holding what the user added stays at the same config
-	// reference, for ownList to keep when magpie is back.
+	// dropList retains an existing catalog as magpie steps out, so
+	// reconnect keeps its prompts. An empty or missing list can be removed.
 	//
 	// The config never names it once it is gone: Codex reads the file as
 	// it loads its config, and with it missing loads none at all ("No such
@@ -463,8 +462,7 @@ func codexIn(at place) *Agent {
 		c := get("model_catalog_json")
 		return c != "" && (ownCatalog(c) || deskCatalog(c) || !theirListGone(c))
 	}
-	// A local catalog is the base through provider changes. Only a plain
-	// generated provider list can go back to the gateway's live list.
+	// An existing local catalog remains the base through provider changes.
 	keepCatalog := func() bool {
 		c := get("model_catalog_json")
 		if c == "" {
@@ -566,7 +564,7 @@ func codexIn(at place) *Agent {
 				return next, nil
 			}
 			return nil, fmt.Errorf("Codex desktop catalog became unavailable; keeping the previous file")
-		}, false); err != nil {
+		}, false, get("model_reasoning_effort")); err != nil {
 			return err
 		}
 		if get("model_catalog_json") == "" {

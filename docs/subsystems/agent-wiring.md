@@ -14,13 +14,13 @@ The file named by Codex's `model_catalog_json` is the basis of subsequent
 model-list updates, including a custom filename. Without one, Magpie uses
 `magpie-models.json` or `magpie-desktop-models.json` as before. Model picks,
 automatic replacements and changes between provider and ChatGPT wiring
-keep a customized catalog at its current path. Profile-only wiring follows
-the same rule in its own config. Disconnect never deletes a custom-path
-file, and retains a managed file containing local customizations.
+keep an existing catalog at its current path. Profile-only wiring follows
+the same rule in its own config. Disconnect retains existing catalogs,
+including ones whose contents still equal their initial generated values.
 
 `writeCodexCatalog` in
 [`codex_catalog_edits.go`](../../internal/agent/codex_catalog_edits.go)
-merges changes from the generated catalog into the existing JSON. A
+merges model membership and explicit control changes into the existing JSON. A
 versioned record, `codex-catalog-<path hash>.json` in Magpie's config
 directory, keeps generated-source fingerprints separately from snapshots
 of the local model entries. The snapshots include local instructions so
@@ -28,19 +28,24 @@ temporarily removed models can return with their customizations. First
 adoption and older records without snapshots establish a local baseline;
 missing historical entries are not treated as deliberate global disables.
 
-Later syncs apply changed source fields recursively, preserving unrelated
-local fields, including top-level and nested custom data. Arrays are
-replaced as a field, and null is distinct from an absent field. A Magpie
-change to the same field wins over its local value. Models previously
-managed by the source leave the file when removed from that source; local
-models unknown to it remain. Removed managed entries are archived with
-their local fields, order and source baseline. On return they are restored,
-with source changes made while absent applied to the saved fields.
-Adding or removing models preserves the surviving local order, with new
-models appended after existing priorities.
-Changes to the source's relative order or the explicit Codex ordering
-update managed model order and priorities together. A sync with no source
-changes keeps local edits rather than restoring generated defaults.
+Existing JSON is authoritative: source refreshes do not replace, add or
+remove its fields, including top-level data, `base_instructions` and the
+whole `model_messages` object. A field deliberately omitted locally stays
+omitted. Only new models are initialized from the generated source.
+Explicit changes to Magpie's model controls can still update context,
+compaction, reasoning levels, input modalities and display names. The
+Codex controls for new-session effort, review model, agent version and
+provider-name suffix still update their corresponding fields. Previously
+untracked controls first establish a baseline without changing local data.
+Prompt settings never replace instructions already held in a local catalog.
+Models previously managed by the source leave the file when removed from
+that source; local models unknown to it remain. Removed managed entries
+are archived with their complete local fields and order. On return they
+are restored, applying allowed model-control changes made while absent
+and retaining their instructions. Adding or removing models preserves the
+surviving local order, with new models appended after existing priorities.
+Only an explicit Codex ordering change reorders existing managed models;
+a backend list's new order does not.
 
 Provider and ChatGPT wiring use different catalog sources. Switching
 between them establishes a new field baseline without replacing local
@@ -63,7 +68,7 @@ provider model's reasoning preferences through `ApplyCodexModelEdits`, so
 the provider editor reflects the selection. Descriptions remain local, and
 an imported selection containing only `high` stays that way even when the
 generator normally adds a synthetic `ultra` option.
-An explicit Magpie change to the same field takes precedence over a
+An explicit Magpie change to these model controls takes precedence over a
 concurrent local edit. Other local fields are not automatically imported
 into shared settings. To explicitly import supported fields of a model, use:
 
@@ -89,8 +94,11 @@ on normal sync, and an already running Codex may need to reload the file.
 
 Instruction replacements are saved as settings' `codexModelInstructions`,
 keyed by the canonical provider/model id (native slugs map to `codex/slug`).
-They apply to both local catalogs and both HTTP Codex model-list routes;
-the ETag includes them and the explicit model specifications. The original
+They initialize new local models and apply to both HTTP Codex model-list
+routes; existing local instructions take precedence over these settings.
+Importing instructions does not replace an existing local prompt or its
+message structure. The ETag includes the settings and explicit model
+specifications. The original
 official instruction, compaction, reasoning and modality fields are kept
 in `codex-original-instructions.json`, so a client cache of a replaced
 prompt or specification cannot freeze it after reset or leak it into another agent's

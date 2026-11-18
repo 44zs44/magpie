@@ -201,7 +201,7 @@ func codexCatalogClone(fields map[string]json.RawMessage) map[string]json.RawMes
 	return out
 }
 
-func codexCatalogRecord(raw []byte) (codexCatalogBaseline, error) {
+func codexCatalogRecord(raw []byte, effort string) (codexCatalogBaseline, error) {
 	top, order, models, err := codexCatalogRead(raw)
 	if err != nil {
 		return codexCatalogBaseline{}, err
@@ -230,6 +230,12 @@ func codexCatalogRecord(raw []byte) (codexCatalogBaseline, error) {
 		// Track explicit choices too: choosing the current default must
 		// still replace a different value in the local catalog.
 		put := func(k string, v any) { b, _ := json.Marshal(v); m.Settings[k] = codexFieldHash(b) }
+		put("default_reasoning_level", effort)
+		put("auto_review_model_override", s.CodexAutoReview)
+		put("multi_agent_version", s.CodexAgentsV1)
+		put("name_suffix", provider.SuffixModeFor("codex"))
+		put("context_cap", []any{s.ContextCap, s.ContextCapAll})
+		put("vision", s.Vision)
 		if name, ok := s.ModelNames[ref]; ok {
 			put("display_name", name)
 		}
@@ -338,63 +344,16 @@ func codexCatalogEdits(cur []byte, was, next codexCatalogBaseline) (codexCatalog
 	return plan, nil
 }
 
-// Objects merge by member; arrays and scalars change as a whole. A missing
-// member is a deletion, distinct from an explicit null.
-func codexCatalogMergeFields(local, generated map[string]json.RawMessage, was map[string]codexCatalogField) {
-	keys := map[string]bool{}
-	for k := range was {
-		keys[k] = true
-	}
-	for k := range generated {
-		keys[k] = true
-	}
-	for k := range keys {
-		raw, exists := generated[k]
-		old := was[k]
-		if codexFieldHash(raw) == old.Hash {
-			continue
-		}
-		if !exists {
-			var have map[string]json.RawMessage
-			if old.Object && json.Unmarshal(local[k], &have) == nil && have != nil {
-				codexCatalogMergeFields(have, nil, old.Children)
-				if len(have) > 0 {
-					local[k], _ = json.Marshal(have)
-					continue
-				}
-			}
-			delete(local, k)
-			continue
-		}
-		var next, have map[string]json.RawMessage
-		if json.Unmarshal(raw, &next) == nil && next != nil {
-			json.Unmarshal(local[k], &have)
-			if have == nil {
-				have = map[string]json.RawMessage{}
-			}
-			codexCatalogMergeFields(have, next, old.Children)
-			local[k], _ = json.Marshal(have)
-		} else {
-			local[k] = raw
-		}
-	}
-}
-
 func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *codexCatalogBaseline) ([]byte, error) {
 	top, order, local, err := codexCatalogRead(cur)
 	if err != nil {
 		return nil, err
 	}
-	nextTop, _, models, err := codexCatalogRead(generated)
+	_, _, models, err := codexCatalogRead(generated)
 	if err != nil {
 		return nil, err
 	}
 	tracked := was.Version >= 2
-	sourceChanged := tracked && was.Source != next.Source
-	if tracked && !sourceChanged {
-		codexCatalogMergeFields(top, nextTop, was.Top)
-	}
-	previous := slices.Clone(was.Order)
 	slots := slices.Clone(was.Slots)
 	if len(slots) == 0 {
 		slots = slices.Clone(order)
@@ -481,11 +440,6 @@ func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *co
 				alias = strings.TrimPrefix(slug, "codex/")
 			}
 			if models[alias] != nil && local[alias] == nil && was.Models[alias].Generated == nil {
-				for i, prior := range previous {
-					if prior == slug {
-						previous[i] = alias
-					}
-				}
 				delete(local, slug)
 				slug = alias
 				local[slug] = fields
@@ -511,36 +465,34 @@ func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *co
 					old.Settings["supported_reasoning_levels"] == next.Models[slug].Settings["supported_reasoning_levels"]
 				keepLocalLevels = err == nil && valueErr == nil && value != "null" && value == configured && (value != before || reworded)
 			}
-			if !sourceChanged {
-				priority, hadPriority := fields["priority"]
-				codexCatalogMergeFields(fields, models[slug], old.Generated)
-				if hadPriority {
-					fields["priority"] = priority
-				} else {
-					delete(fields, "priority")
+			// Existing rows belong to the local catalog. Only explicit model
+			// controls may update them; neither source refreshes nor prompt
+			// settings may replace instructions or restore deleted fields.
+			defaultChanged := false
+			for _, k := range []string{"context_window", "auto_compact_token_limit", "supported_reasoning_levels", "input_modalities", "display_name", "default_reasoning_level", "auto_review_model_override", "multi_agent_version"} {
+				changed := old.Settings[k] != next.Models[slug].Settings[k]
+				switch k {
+				case "default_reasoning_level", "auto_review_model_override", "multi_agent_version":
+					// Older baselines did not record these controls. Establish
+					// their state first, without rewriting the user's catalog.
+					_, known := old.Settings[k]
+					changed = known && changed
+				case "display_name":
+					suffix, known := old.Settings["name_suffix"]
+					changed = changed || known && suffix != next.Models[slug].Settings["name_suffix"]
+				case "context_window":
+					capAt, known := old.Settings["context_cap"]
+					changed = changed || known && capAt != next.Models[slug].Settings["context_cap"]
+				case "input_modalities":
+					vision, known := old.Settings["vision"]
+					changed = changed || known && vision != next.Models[slug].Settings["vision"]
 				}
-			}
-			for _, k := range append(append([]string{}, codexEditableFields...), "display_name") {
-				if old.Settings[k] != next.Models[slug].Settings[k] {
+				if changed {
+					defaultChanged = defaultChanged || k == "default_reasoning_level"
 					if raw, ok := models[slug][k]; ok {
 						fields[k] = raw
 					} else {
 						delete(fields, k)
-					}
-					if k == "base_instructions" {
-						var have, messages map[string]json.RawMessage
-						json.Unmarshal(fields["model_messages"], &have)
-						json.Unmarshal(models[slug]["model_messages"], &messages)
-						if raw, ok := messages["instructions_template"]; ok {
-							if have == nil {
-								have = map[string]json.RawMessage{}
-							}
-							have["instructions_template"] = raw
-							fields["model_messages"], _ = json.Marshal(have)
-						} else if have != nil {
-							delete(have, "instructions_template")
-							fields["model_messages"], _ = json.Marshal(have)
-						}
 					}
 				}
 			}
@@ -566,23 +518,24 @@ func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *co
 					fields["supported_reasoning_levels"], _ = json.Marshal(afterLevels)
 				}
 			}
-			if !sourceChanged && old.Generated["supported_reasoning_levels"].Hash != next.Models[slug].Generated["supported_reasoning_levels"].Hash || old.Settings["supported_reasoning_levels"] != next.Models[slug].Settings["supported_reasoning_levels"] {
+			if defaultChanged || old.Settings["supported_reasoning_levels"] != next.Models[slug].Settings["supported_reasoning_levels"] {
 				var effort string
 				var levels []struct {
 					Effort string `json:"effort"`
 				}
 				json.Unmarshal(fields["default_reasoning_level"], &effort)
 				json.Unmarshal(fields["supported_reasoning_levels"], &levels)
-				valid := effort == ""
+				var choices []string
 				for _, level := range levels {
-					valid = valid || level.Effort == effort
+					choices = append(choices, level.Effort)
 				}
-				if !valid {
-					if raw, ok := models[slug]["default_reasoning_level"]; ok {
-						fields["default_reasoning_level"] = raw
-					} else {
-						delete(fields, "default_reasoning_level")
+				if effort != "" && !slices.Contains(choices, effort) {
+					var chosen *string
+					if len(choices) > 0 {
+						value := codexcat.ModelDefault(choices, effort)
+						chosen = &value
 					}
+					fields["default_reasoning_level"], _ = json.Marshal(chosen)
 				}
 			}
 		}
@@ -606,18 +559,7 @@ func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *co
 			kept = append(kept, slug)
 		}
 	}
-	var commonBefore, commonAfter []string
-	for _, slug := range previous {
-		if models[slug] != nil {
-			commonBefore = append(commonBefore, slug)
-		}
-	}
-	for _, slug := range next.Order {
-		if slices.Contains(previous, slug) {
-			commonAfter = append(commonAfter, slug)
-		}
-	}
-	if tracked && (!sourceChanged && !slices.Equal(commonBefore, commonAfter) || was.Ordering != next.Ordering || restoredOrderChanged) {
+	if tracked && (was.Ordering != next.Ordering || restoredOrderChanged) {
 		// Keep local-only rows in their slots, and fill managed slots in
 		// Magpie's order. Codex's existing slots are ordered by priority,
 		// which can differ from their positions in the JSON array.
@@ -675,7 +617,7 @@ func codexCatalogMerge(cur, generated []byte, was codexCatalogBaseline, next *co
 
 // Only a successful write advances the generated baseline. Catalog and
 // baseline commit together, independently of the agent wiring transaction.
-func writeCodexCatalog(path string, build func() ([]byte, error), providerList bool) (err error) {
+func writeCodexCatalog(path string, build func() ([]byte, error), providerList bool, effort string) (err error) {
 	// A save can invoke SyncCatalog synchronously. Never wait for that
 	// callback under this lock; a competing sync schedules a fresh round.
 	if !codexCatalogEditMu.TryLock() {
@@ -729,7 +671,7 @@ func writeCodexCatalog(path string, build func() ([]byte, error), providerList b
 	if err != nil {
 		return err
 	}
-	next, err := codexCatalogRecord(b)
+	next, err := codexCatalogRecord(b, effort)
 	if err != nil {
 		return err
 	}
@@ -767,7 +709,7 @@ func writeCodexCatalog(path string, build func() ([]byte, error), providerList b
 			return err
 		}
 		source := next.Source
-		next, err = codexCatalogRecord(b)
+		next, err = codexCatalogRecord(b, effort)
 		if err != nil {
 			return err
 		}
@@ -918,26 +860,10 @@ func ImportCodexCatalog(path, ref string, fields []string) (err error) {
 	return nil
 }
 
-// A disconnect may remove a generated list, but never local customizations.
-// Unknown or malformed state is kept for explicit recovery too.
+// Every existing catalog is local state, even before its first manual edit.
+// Disconnect must not make reconnect initialize its prompts from new defaults.
+// Unreadable state is kept for explicit recovery too.
 func codexCatalogPending(path string) bool {
 	cur, err := edit.Read(path)
-	if err != nil {
-		return true
-	}
-	if len(cur) == 0 {
-		return false
-	}
-	if _, _, _, err := codexCatalogRead(cur); err != nil {
-		return true
-	}
-	raw, err := edit.Read(codexBaselinePath(path))
-	if err != nil || len(raw) == 0 {
-		return true
-	}
-	var was codexCatalogBaseline
-	if json.Unmarshal(raw, &was) != nil || !was.valid() || was.Version < 2 {
-		return true
-	}
-	return len(was.Archive) > 0 || codexFieldHash(cur) != was.Hash
+	return err != nil || len(cur) > 0
 }
