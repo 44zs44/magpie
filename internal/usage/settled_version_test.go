@@ -18,7 +18,7 @@ import (
 // settled days, under settledCountVersion. A change that counts them
 // otherwise changes it: raise settledCountVersion and set this to the new
 // hash in the same commit.
-const settledCounted = "a981aa6c6e0d2f005fdbf12d57a081951515e61a394189e4336ebc65d80e0ea7"
+const settledCounted = "88005faeda76874a492a423a818a1ed7c5d5f874b82924b85f8df2e247e428c0"
 
 // The settled days, a page's cells and Codex's effort are kept on disk
 // under settledCountVersion, not under this package's source: an upgrade

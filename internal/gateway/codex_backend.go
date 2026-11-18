@@ -158,6 +158,12 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 				s.codexPrediction(w, r, body, to)
 				return
 			}
+			// the app's prompt suggestions on the model set for them
+			// (codexSuggestionsTo), the model asked kept for the trace
+			if to := codexSuggestionsTo(r, agentOf(r), kind, model); to != "" {
+				r = withSuggestionsAsked(r, model)
+				body, model = withModel(body, to), to
+			}
 			// a subagent on one of Codex's own models, put on the model
 			// set for Codex's subagents, a ChatGPT account's in magpie;
 			// the request on the model asked for when it can't be, the
@@ -1951,6 +1957,9 @@ func withoutUnreadable(body, msg []byte) ([]byte, bool) {
 }
 
 // withoutItem is a Responses request without the input item of this id.
+// A compaction of magpie's own (cmp_magpie_…, hey_boyce on X: one that
+// reached OpenAI as it was written) goes as the summary it holds, so
+// the turn keeps what came before.
 func withoutItem(body []byte, id string) ([]byte, bool) {
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
@@ -1960,17 +1969,27 @@ func withoutItem(body []byte, id string) ([]byte, bool) {
 	if json.Unmarshal(q["input"], &items) != nil {
 		return nil, false
 	}
-	kept := items[:0:0]
+	kept, found := items[:0:0], false
 	for _, it := range items {
 		var t struct {
-			ID string `json:"id"`
+			ID        string `json:"id"`
+			Type      string `json:"type"`
+			Encrypted string `json:"encrypted_content"`
 		}
 		if json.Unmarshal(it, &t) == nil && t.ID == id {
+			found = true
+			if t.Type == "compaction" {
+				if msg, ours := codexsummary.Message(t.Encrypted); ours && msg != nil {
+					if b, err := json.Marshal(msg); err == nil {
+						kept = append(kept, b)
+					}
+				}
+			}
 			continue
 		}
 		kept = append(kept, it)
 	}
-	if len(kept) == len(items) {
+	if !found {
 		return nil, false
 	}
 	q["input"], _ = json.Marshal(kept)
@@ -4180,7 +4199,9 @@ func itemNotFound(rec *recorder) bool {
 // outputs and reasoning, and answers anything else 400
 // "unsupported_input_item" with param "input" (#5181, Edward4226; #5259,
 // Mmx233, a Codex subagent's history), and Grok's backend an
-// agent_message 422 "unknown item type". It comes as that status, as
+// agent_message 422 "unknown item type", and a local Qwen server's
+// Responses API 400 "Unsupported input item: agent_message" (cyberestro
+// on X). It comes as that status, as
 // another magpie's message in front of it ("Remote magpie: Command Code:
 // {…}", a 400 or its 502), or as an error event in the summary's stream.
 // The conversation as text is messages alone, which it takes. A refusal
@@ -4196,7 +4217,7 @@ func inputKindRefused(rec *recorder, err error) bool {
 	return inputKindWords.Match(rec.body.Bytes())
 }
 
-var inputKindWords = lazyre.New(`(?i)unsupported_input_item|unknown item type`)
+var inputKindWords = lazyre.New(`(?i)unsupported[ _]input[ _]item|unknown item type`)
 
 // compactFailure names who answered a summary request with a failure — the
 // provider, the model and the provider's base URL — and what it said.

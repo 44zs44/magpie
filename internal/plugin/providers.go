@@ -601,7 +601,7 @@ func UseCached(ps []Provider) {
 	provMu.Unlock()
 	// as asked with the plugins as they are now
 	listSeen.Lock()
-	listSeen.stamp, listSeen.set = listStamp(), ps != nil
+	listSeen.stamp, listSeen.set = seenStamp(), ps != nil
 	listSeen.Unlock()
 }
 
@@ -697,6 +697,8 @@ func Settle() {
 	// answered with these
 	UseCached(nil)
 	cancelCatalogSyncs()
+	// nor a Bun download, which writes in the test's folder
+	endBunFetches()
 }
 
 // Cached is the plugins' providers as last asked, without starting the

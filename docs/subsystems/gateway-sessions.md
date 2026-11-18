@@ -441,6 +441,11 @@ covers them), and `sessions/manage` carries the same as `reads`. While
 `asked` is false the Sessions page shows the consent (`consentCard` in
 the sessions plugin): each agent found with a switch, off; Allow selected
 saves `all: false` with each agent picked or not, Allow all `all: true`.
+A choice with `all` false reads no agent it doesn't name, so one found
+after it (Antigravity 2.0 installed after Allow selected: baysonfox on
+X) is `new` in `found` (on disk, not named, not read), and the Sessions
+page asks about those once (`laterCard`): Show their sessions sends
+each `true`, Keep off `false`, so it isn't new again.
 Settings › Privacy, *Agents' session history* (`renderSessionReads` in
 the sessions plugin's `settings.js`), has *Agents found later* (`all`, sent with each listed agent
 at the value its row shows) and a row per agent.
@@ -504,6 +509,26 @@ Codex's newest rollout's last line before magpie restarts Codex
 `TestFreshInstallReadsNoAgentUntilAllowed`,
 `TestSettleReadsKeepsWhatWasThere`, `TestSessionReadsRoutes`,
 `sessions-reads.test.cjs`.
+
+LiveAgent's sessions (#6741,
+[`liveagent.go`](../../internal/sessions/liveagent.go)) are K-brain's
+`<root>/sessions/<project>/<id>/session.jsonl` (older ones right under
+`sessions`; `.runs` and `.deleted-history` are skipped), the root found by
+the rule `agent.liveAgentDir` uses (`sessions.LiveAgentDirIn`:
+`$LIVEAGENT_HOME`, `$K_BRAIN_HOME`, `~/.liveagent/data-dir.json`,
+`~/.liveagent`). K-brain rewrites the whole file, so it is parsed whole.
+Its first line, `session_meta`, gives the id, title, cwd and the running
+totals (`usage_in` with cache reads and writes in it, `usage_cached`,
+`usage_out`, `model_usage` by `"<model> @ <provider>"`); each reply's own
+`usage` counts on its day, and what the totals hold beyond those replies
+(a compaction's call, a rewound reply) plus `sub_usage` counts on the last
+message's day. A fork's copies (`seq` up to `fork_seq`) are its source's
+and count in neither. A subagent's session (`task-<parent>-<task>`,
+`task_id` set) is filed under its parent with its tools but no tokens:
+they are the parent's `sub_usage`. There is no Calls reader, as the
+gateway's own record of LiveAgent's calls carries no session, and no
+resume command or delete. Tests: `TestLiveAgentSessions` (the issue's
+literal `session_meta`), `TestLiveAgentTranscript`, `TestLiveAgentRoot`.
 
 ## Local Gateway Conversation Recording
 
@@ -634,6 +659,64 @@ Verification: `TestSearchSession*` (`TestSearchSessionReadsOnlyLinesWithTheWords
 for the line filter), `TestContainsFold`, `TestMayHoldSkipsAFileWithoutTheWords`,
 `TestGatewayTitleAndSearch`, `TestSessionsSearch*`; browser
 `sessions-search.test.cjs`.
+
+### What was said in every agent's sessions
+
+The same search over every agent at once (cryingLiu on X) can't read the
+files each query: this computer's Claude Code history alone is 29 GB in
+7,390 files. `sessions.SearchSaid` asks an index of the words said in them,
+`said-v1.db` beside `sessions.json`: an SQLite FTS5 table with no text kept,
+only which words are in which session (`content=''`, `detail='none'`; the
+user's and the model's text, about 1% of the bytes). It is made the first
+time a search asks, in the background, the newest sessions first, from the
+sessions `sessions.json` already lists (`saidSessions`), and brought up to
+date by the next search more than 10 s on (`saidStale`): a Claude Code or
+Codex file that grew is read from where the last read ended (`upto`, at a
+line's end), any other session again whole when its files changed, and a
+session gone or rewritten is dropped. A search waits for that at most 2 s
+(`saidWait`) and is otherwise answered from what is indexed, saying
+`indexed` of `total`; while the first listing of the sessions is still
+running (about 50 s over a 29 GB Claude Code and 60 GB Codex history with
+a cold `sessions.json`) it says `listing` instead, so neither the page nor
+the MCP server reads an empty first answer as "no session says it". Words are letter-or-digit runs matched by their start
+(`auth` finds `authentication`); Chinese, Japanese and Korean go as each
+two characters side by side (`saidWords`, `saidTerms`). The index only says
+which sessions are worth reading: those are read newest first with
+`SearchSession` for the hit and the words round it, to `limit` hits.
+An agent magpie may not read (`Reads`, Settings › Sessions and gateway
+mode) is left out of every answer at once and out of the index on its next
+update; turning gateway mode on or off closes the index (`Reset` →
+`ForgetSaid`, which stops a refresh running at the next session).
+
+- `GET /api/sessions/said?q=&agent=&limit=` is the Sessions page's: under
+  the agent's own list, the sessions of other agents that said the words
+  (Other agents), asked again every 3 s while the index is still reading.
+  The page asks nothing in gateway mode.
+- `GET /api/sessions/transcript?…&find=` reads the conversation from a few
+  messages before the first part that says the words (`TranscriptAt`,
+  `transcriptLead`), with `from` the parts left out. A hit, in the agent's
+  list or another's, opens the conversation sheet there: the part is ringed
+  (`sess-found`), its words marked with the CSS Custom Highlight API where
+  the browser has it, and the sheet, never the page, scrolled to it once.
+- The `magpie-sessions` MCP server (`SessionsMCPPath`,
+  `/mcp/magpie/sessions`, [`sessions_mcp.go`](../../internal/gateway/sessions_mcp.go))
+  gives an agent `search_sessions(query, agent?, limit)` and
+  `read_session(session, find?, from?, max_chars?)`, as text: each hit's
+  `agent:id`, title, folder, time and the words round it; a read numbers
+  each message, shortens tool calls and answers, leaves thinking out, and
+  says how to go on (`from=`). Like Magpie Memory it answers the agents on
+  this computer alone, never another computer's key or a web page. The
+  Library offers it as opt-in, run as `magpie mcp sessions`
+  (`browsermcp.RunSessions`).
+
+Implementation: [`internal/sessions/said_index.go`](../../internal/sessions/said_index.go),
+`TranscriptAt` in [`transcript.go`](../../internal/sessions/transcript.go),
+the `said` route in [`sessions_manage.go`](../../internal/gui/sessions_manage.go).
+Verification: `TestSearchSaid*` (`TestSearchSaidReadsAGrownFileFromWhereItEnded`,
+`TestSearchSaidLeavesOutAgentsNotRead`), `TestSaidWords`, `TestSaidTerms`,
+`TestTranscriptAtStartsBeforeTheHit`, `TestSessionsMCP*`,
+`TestSessionsServerInDiscover`, `TestGatewayModeListsNoOwnSessions`;
+browser `sessions-said.test.cjs`, `library-sessions-mcp.test.cjs`.
 
 Verification: `TestGatewayConversation*` (`TestGatewayConversationNeedsTheClientsSession`
 and `TestGatewayConversationClientRequestPrefixedSession` for the two rules above), `TestGatewaySessionHistoryAndCalendar`,
@@ -826,7 +909,14 @@ Code's (#1779; its sessions are on the Sessions page too, from the same
 `TestCodeBuddySessionsListedUnderTheirName`), MiniMax Code's (#1605), Kimi Code's (#1607,
 [`calls_kimi.go`](../../internal/sessions/calls_kimi.go)) and Pi's,
 Raft's Pi agents' and omp's, here and in WSL (#1951,
-[`calls_pi.go`](../../internal/sessions/calls_pi.go)). Each skips the
+[`calls_pi.go`](../../internal/sessions/calls_pi.go)), and Qoder's and
+Qoder CN's (`~/.qoder`, `~/.qoder-cn`), read as Claude Code's are
+(`ccCallAgent`; eating_dream on X). Qoder writes a reply on its own models
+(`auto` among them) with every count 0 unless `QODER_EXPOSE_TOKEN_USAGE`
+is set (qodercli 1.1.0 on, and the app's worker), and with the reply's
+`credits`: such a call has no tokens and no price, and its `Credits` are
+summed as a plan's credits are; a reply written with no usage at all is no
+call (`TestQoderCalls`, `TestDirectQoderCallsByCredits`). Each skips the
 calls the agent made through magpie's own entry, which the gateway logged
 with the account that answered: Kimi Code's are the ones whose
 `usage.record` model begins `magpie/`. Kimi Code's calls are its
